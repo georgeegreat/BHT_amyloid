@@ -1,21 +1,20 @@
 #!/usr/bin/env Rscript
-# APPNN Parser
-# Usage: Rscript parser_appnn.R <input.fasta>
+# APPNN Parser&Converter
+# Usage: Rscript appnn_converter.R <input.fasta>
 
 # ==================== PACKAGE MANAGEMENT ====================
 
-#' Install required packages if not already installed
 install_required_packages <- function() {
   required_packages <- c("dplyr", "tidyr", "readr", "stringr", "purrr")
   
-  # Check which packages are not installed
+
   installed_packages <- rownames(installed.packages())
   missing_packages <- setdiff(required_packages, installed_packages)
   
   if (length(missing_packages) > 0) {
     cat("Installing required packages:", paste(missing_packages, collapse = ", "), "\n")
     
-    # Try to install from CRAN
+    # Install from CRAN
     tryCatch({
       install.packages(missing_packages, repos = "https://cloud.r-project.org")
       cat("Successfully installed packages:", paste(missing_packages, collapse = ", "), "\n")
@@ -28,7 +27,6 @@ install_required_packages <- function() {
   }
 }
 
-#' Check and install appnn package from GitHub if needed
 check_appnn_package <- function() {
   if (!requireNamespace("appnn", quietly = TRUE)) {
     cat("The 'appnn' package is not installed.\n")
@@ -36,10 +34,8 @@ check_appnn_package <- function() {
   }
 }
 
-# Install base packages first
-install_required_packages()
 
-# Now load the packages
+install_required_packages()
 suppressPackageStartupMessages({
   library(dplyr)
   library(tidyr)
