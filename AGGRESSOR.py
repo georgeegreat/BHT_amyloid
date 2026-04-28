@@ -19,6 +19,8 @@ from typing import (
     FrozenSet, Protocol, runtime_checkable
 )
 from functools import cached_property
+from pathlib import Path
+from itertools import combinations, product
 
 # Defining constants
 VALID_AAS = set('ACDEFGHIKLMNPQRSTVWY')
@@ -888,6 +890,9 @@ USAGE EXAMPLES:
 7. Detailed verbose output:
    python AGGRESSOR.py protein.fasta --regions 10:20 -v
 
+8. Analyze the entire sequence (all residues):
+   python AGGRESSOR.py protein.fasta --regions all
+
 AVAILABLE RULES:
 =========================================================
 • hydrophobic_aliphatic    : Triggers if ≥3 V, I, L, A, M residues within 4 positions of each other
@@ -1009,6 +1014,26 @@ def parse_region(region_str: str, seq_length: int) -> Tuple[int, int]:
         return start, stop
     except ValueError as e:
         raise ValueError(f"Invalid region format '{region_str}': {e}")
+
+
+def normalize_regions(regions: Optional[List[str]], seq_length: int) -> Optional[List[str]]:
+    """
+    Normalize --regions values.
+    
+    Supports a special value "all" (case-insensitive) which expands to "1:<seq_length>".
+    If "all" is present alongside other regions, "all" takes precedence.
+    """
+    if not regions:
+        return regions
+    
+    tokens = [r.strip() for r in regions if r is not None and str(r).strip()]
+    if not tokens:
+        return None
+    
+    if any(t.lower() == "all" for t in tokens):
+        return [f"1:{seq_length}"]
+    
+    return tokens
 
 def find_clusters(positions: List[int], max_gap: int = 3) -> List[List[int]]:
     """
@@ -1557,7 +1582,9 @@ def mutate_sequence(sequence: str, positions: List[int], mutations: List[str],
                             if cluster.get('nearby_hydrophobics'):
                                 logger.debug(f"    Nearby hydrophobic residues:")
                                 for h in cluster['nearby_hydrophobics']:
-                                    logger.debug(f"      {h['residue']}{h['position']} (distance: {h['distance']})")
+                                    position = h.get('position', 'unknown')
+                                    residue = sequence[position - 1] if isinstance(position, int) else '?'
+                                    logger.debug(f"      {residue}{position}")
                         
                         logger.debug(f"    Size: {cluster['size']}, Span: {cluster['span']}aa")
                 
@@ -1644,6 +1671,362 @@ def mutate_sequence(sequence: str, positions: List[int], mutations: List[str],
     
     return sorted_results, region_analyses
 
+def extract_mutation_info(description: str, regions: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Extract mutation information from description string.
+    
+    Args:
+        description: Mutation description (e.g., "V10F | Rule 'hydrophobic_aliphatic' (agg_score=3)")
+        regions: List of region strings (e.g., ["10:20", "30:40"])
+    
+    Returns:
+        Dict with keys: position, is_gatekeeping, region, agg_score, description
+    """
+    info = {
+        'position': None,
+        'is_gatekeeping': False,
+        'region': None,
+        'agg_score': 0,
+        'description': description
+    }
+    
+    # Extract position and aggregation score
+    match = re.search(r'(\d+)', description)
+    if match:
+        info['position'] = int(match.group(1))
+    
+    match_score = re.search(r'agg_score=(\d+)', description)
+    if match_score:
+        info['agg_score'] = int(match_score.group(1))
+    
+    info['is_gatekeeping'] = 'GATEKEEPING' in description
+    
+    # Determine which region this position belongs to
+    if regions and info['position']:
+        for region_str in regions:
+            start, stop = parse_region(region_str, 999999)  # Use large number to avoid validation error
+            if start <= info['position'] <= stop:
+                if info['region'] is None:
+                    info['region'] = region_str
+                else:
+                    # Position belongs to multiple regions (overlap)
+                    info['region'] += f",{region_str}"
+    
+    return info
+
+
+def get_region_for_position(position: int, regions: Optional[List[str]] = None) -> Optional[str]:
+    """Get the region(s) a position belongs to."""
+    if not regions or position is None:
+        return None
+    
+    matching_regions = []
+    for region_str in regions:
+        start, stop = parse_region(region_str, 999999)
+        if start <= position <= stop:
+            matching_regions.append(region_str)
+    
+    return ','.join(matching_regions) if matching_regions else None
+
+
+def generate_multi_point_mutations(
+    mutations: List[Tuple[str, str]],
+    sequence: str,
+    multi_mutation_levels: List[int],
+    regions: Optional[List[str]] = None,
+    max_combinations: int = 10000,
+    top_variants_per_position: int = 3
+) -> Dict[int, List[Dict[str, Any]]]:
+    """
+    Generate multi-point mutations from single mutations.
+    
+    Args:
+        mutations: List of (description, sequence) tuples for single mutations
+        sequence: Original protein sequence
+        multi_mutation_levels: Levels to generate (e.g., [2, 3] for double and triple)
+        regions: List of region strings for categorization
+        max_combinations: Maximum combinations to generate per level
+    
+    Returns:
+        Dict mapping level (2, 3, etc.) to list of dicts with:
+          - description, sequence, agg_score
+          - positions, regions, is_gatekeeping, is_all_gatekeeping
+    """
+    # Parse mutation info from descriptions
+    mutation_infos = []
+    for desc, seq in mutations:
+        info = extract_mutation_info(desc, regions)
+        if not info['position'] or not seq:
+            continue
+        
+        # Only point mutations can be combined into multi-point substitutions.
+        # Skip entries like insertions which don't encode "A123B".
+        match = re.search(r'([A-Z])(\d+)([A-Z])', desc)
+        if not match:
+            continue
+        
+        new_aa = match.group(3)
+        mutation_infos.append({
+            'position': info['position'],
+            'is_gatekeeping': info['is_gatekeeping'],
+            'region': info['region'],
+            'agg_score': info['agg_score'],
+            'description': desc,
+            'sequence': seq,
+            'original_aa': sequence[info['position'] - 1],
+            'new_aa': new_aa
+        })
+    
+    # Group by position to avoid combinatorial blow-up and invalid duplicate-position combos.
+    # Keep only the best (highest agg_score) variants per position.
+    by_position: Dict[int, List[Dict[str, Any]]] = {}
+    for mi in mutation_infos:
+        by_position.setdefault(mi['position'], []).append(mi)
+    
+    # Deduplicate per-position variants by new amino acid, keeping highest scoring option.
+    filtered_by_position: Dict[int, List[Dict[str, Any]]] = {}
+    for pos, variants in by_position.items():
+        best_by_newaa: Dict[str, Dict[str, Any]] = {}
+        for v in variants:
+            new_aa = v.get('new_aa')
+            if not new_aa:
+                continue
+            existing = best_by_newaa.get(new_aa)
+            if existing is None or v.get('agg_score', 0) > existing.get('agg_score', 0):
+                best_by_newaa[new_aa] = v
+        
+        kept = list(best_by_newaa.values())
+        kept.sort(key=lambda x: x.get('agg_score', 0), reverse=True)
+        if top_variants_per_position and top_variants_per_position > 0:
+            kept = kept[:top_variants_per_position]
+        filtered_by_position[pos] = kept
+    
+    # Only positions with at least 1 viable variant can participate
+    viable_positions = sorted([p for p, vs in filtered_by_position.items() if vs])
+    
+    multi_results = {}
+    
+    for level in multi_mutation_levels:
+        if level < 2 or level > len(viable_positions):
+            continue
+        
+        multi_results[level] = []
+        
+        # Generate combinations of positions at this level (not raw mutations),
+        # then choose one variant per selected position.
+        count = 0
+        for pos_combo in combinations(viable_positions, level):
+            if count >= max_combinations:
+                logger.warning(f"Reached maximum combinations ({max_combinations}) for level {level}")
+                break
+            
+            variant_lists = [filtered_by_position[p] for p in pos_combo]
+            for variant_combo in product(*variant_lists):
+                if count >= max_combinations:
+                    break
+                
+                positions = [v['position'] for v in variant_combo]
+                new_aas = [v['new_aa'] for v in variant_combo]
+                
+                # Apply mutations in reverse order to keep indices stable
+                mutations_to_apply = sorted(zip(positions, new_aas), reverse=True, key=lambda x: x[0])
+                combined_seq = sequence
+                for pos, aa in mutations_to_apply:
+                    combined_seq = create_mutated_sequence(combined_seq, pos, aa)
+                
+                combined_agg_score = sum(v.get('agg_score', 0) for v in variant_combo)
+                
+                mutations_str = ' + '.join(
+                    f"{v['original_aa']}{v['position']}{v['new_aa']}"
+                    for v in sorted(variant_combo, key=lambda x: x['position'])
+                )
+                
+                is_all_gatekeeping = all(v.get('is_gatekeeping', False) for v in variant_combo)
+                regions_involved = sorted({v['region'] for v in variant_combo if v.get('region')})
+                regions_str = ', '.join(regions_involved) if regions_involved else "Direct"
+                
+                description = f"{mutations_str} | {regions_str} (level={level}, agg_score={combined_agg_score})"
+                if is_all_gatekeeping:
+                    description += " | GATEKEEPING_COMBINED"
+                
+                multi_results[level].append({
+                    'description': description,
+                    'sequence': combined_seq,
+                    'agg_score': combined_agg_score,
+                    'positions': positions,
+                    'regions': regions_involved,
+                    'level': level,
+                    'is_all_gatekeeping': is_all_gatekeeping
+                })
+                count += 1
+        
+        # Sort by aggregation score (descending)
+        multi_results[level].sort(key=lambda x: x.get('agg_score', 0), reverse=True)
+        logger.info(f"Generated {len(multi_results[level])} level-{level} mutations")
+    
+    return multi_results
+
+
+def categorize_multi_mutations(
+    multi_mutations: Dict[int, List[Union[Tuple[str, str, int], Dict[str, Any]]]],
+    regions: Optional[List[str]] = None
+) -> Dict[int, Dict[str, List[Tuple[str, str, int]]]]:
+    """
+    Categorize multi-mutations by region(s) and mutation type.
+    
+    Categories:
+    - single_region: All positions in the same region
+    - multi_region: Positions span different regions
+    - gatekeeping: Only gatekeeping mutations
+    """
+    categorized = {}
+    
+    for level, mutations in multi_mutations.items():
+        categorized[level] = {
+            'single_region': [],
+            'multi_region': [],
+            'gatekeeping': []
+        }
+        
+        for item in mutations:
+            # Accept both legacy tuple format and new dict format
+            if isinstance(item, dict):
+                desc = item.get('description', '')
+                seq = item.get('sequence', '')
+                agg_score = int(item.get('agg_score', 0) or 0)
+                regions_involved = item.get('regions') or []
+                is_gatekeeping = bool(item.get('is_all_gatekeeping')) or ('GATEKEEPING_COMBINED' in desc)
+            else:
+                desc, seq, agg_score = item
+                regions_involved = re.findall(r'(\d+:\d+)', desc)
+                is_gatekeeping = 'GATEKEEPING_COMBINED' in desc
+            
+            if is_gatekeeping:
+                categorized[level]['gatekeeping'].append((desc, seq, agg_score))
+                continue
+            
+            if not regions_involved or len(set(regions_involved)) == 1:
+                categorized[level]['single_region'].append((desc, seq, agg_score))
+            else:
+                categorized[level]['multi_region'].append((desc, seq, agg_score))
+    
+    return categorized
+
+
+def create_output_directory(base_path: str, multi_mutation_levels: Optional[List[int]] = None) -> Path:
+    """
+    Create organized output directory structure.
+    
+    Args:
+        base_path: Base directory path
+        multi_mutation_levels: Levels to create directories for (e.g., [2, 3])
+    
+    Returns:
+        Path to the created directory
+    """
+    output_dir = Path(base_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    if multi_mutation_levels:
+        for level in sorted(multi_mutation_levels):
+            level_dir = output_dir / f"{_level_to_text(level)}_mutations"
+            level_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"Created directory: {level_dir}")
+    
+    return output_dir
+
+
+def _level_to_text(level: int) -> str:
+    """Convert level number to text (2 -> 'double', 3 -> 'triple', etc.)"""
+    level_names = {
+        2: 'double',
+        3: 'triple',
+        4: 'quadruple',
+        5: 'quintuple',
+        6: 'sextuple'
+    }
+    return level_names.get(level, f'{level}x')
+
+
+def write_multi_mutations_by_category(
+    output_dir: str,
+    original_header: str,
+    original_seq: str,
+    categorized_mutations: Dict[int, Dict[str, List[Tuple[str, str, int]]]],
+    include_original: bool = True
+):
+    """
+    Write categorized multi-mutations to separate FASTA files.
+    
+    Creates files:
+    - {level}_mutations/single_region.fasta
+    - {level}_mutations/multi_region.fasta
+    - {level}_mutations/gatekeeping.fasta
+    """
+    output_base = Path(output_dir)
+    
+    for level in sorted(categorized_mutations.keys()):
+        level_dir = output_base / f"{_level_to_text(level)}_mutations"
+        level_dir.mkdir(parents=True, exist_ok=True)
+        
+        categories = categorized_mutations[level]
+        
+        # Write single region mutations
+        if categories['single_region']:
+            file_path = level_dir / 'single_region.fasta'
+            _write_fasta_file(
+                str(file_path), original_header, original_seq,
+                categories['single_region'], include_original
+            )
+            logger.info(f"Wrote {len(categories['single_region'])} single-region {_level_to_text(level)} mutations")
+        
+        # Write multi region mutations
+        if categories['multi_region']:
+            file_path = level_dir / 'multi_region.fasta'
+            _write_fasta_file(
+                str(file_path), original_header, original_seq,
+                categories['multi_region'], include_original
+            )
+            logger.info(f"Wrote {len(categories['multi_region'])} multi-region {_level_to_text(level)} mutations")
+        
+        # Write gatekeeping mutations
+        if categories['gatekeeping']:
+            file_path = level_dir / 'gatekeeping.fasta'
+            _write_fasta_file(
+                str(file_path), original_header, original_seq,
+                categories['gatekeeping'], include_original
+            )
+            logger.info(f"Wrote {len(categories['gatekeeping'])} gatekeeping {_level_to_text(level)} mutations")
+
+
+def _write_fasta_file(
+    output_file: str,
+    original_header: str,
+    original_seq: str,
+    mutations: List[Tuple[str, str, int]],
+    include_original: bool = True
+):
+    """Internal function to write FASTA file from mutations with scores."""
+    with open(output_file, 'w') as f:
+        if include_original:
+            f.write(f"{original_header}\n")
+            for i in range(0, len(original_seq), FASTA_LINE_LENGTH):
+                f.write(f"{original_seq[i:i+FASTA_LINE_LENGTH]}\n")
+        
+        # Handle both 2-tuple and 3-tuple formats
+        for item in mutations:
+            if len(item) == 3:
+                description, mutated_seq, _ = item
+            else:
+                description, mutated_seq = item
+            
+            # Extract protein name from original header (remove '>')
+            protein_name = original_header[1:].strip()
+            f.write(f">{protein_name}_{description}\n")
+            for j in range(0, len(mutated_seq), FASTA_LINE_LENGTH):
+                f.write(f"{mutated_seq[j:j+FASTA_LINE_LENGTH]}\n")
+
+
 def write_fasta(output_file: str, original_header: str, original_seq: str, 
                 mutations: List[Tuple[str, str]], include_original: bool = True):
     """Write results to FASTA file"""
@@ -1677,7 +2060,7 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     # Region and rule arguments
     region_args = parser.add_argument_group('REGION-BASED MUTAGENESIS')
     region_args.add_argument('-r', '--regions', type=str, nargs='+',
-                            help='Regions to analyze for rule-based mutations (format: start:stop)')
+                            help='Regions to analyze for rule-based mutations (format: start:stop) or "all"')
     region_args.add_argument('--rules', type=str, nargs='+',
                         choices=['hydrophobic_aliphatic', 'aromatic', 'amide', 'hydrophobic_and_aromatic'],
                         help='Specific rules to apply')
@@ -1701,6 +2084,18 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     insertion_args.add_argument('--insert-aas', type=str, nargs='+',
                                help='Amino acids to insert at insertion positions')
     
+    # Multi-point mutation arguments
+    multi_mut_args = parser.add_argument_group('MULTI-POINT MUTATIONS')
+    multi_mut_args.add_argument('--multi-mutations', type=int, nargs='+',
+                               help='Levels of multi-point mutations to generate (e.g., 2 3 for double and triple)')
+    multi_mut_args.add_argument('--multi-top-per-position', type=int, default=3,
+                               help=('Limit the number of substitution variants kept PER POSITION (ranked by agg_score) '
+                                     'when generating multi-mutations. This does NOT restrict which positions are used; '
+                                     'it only reduces combinatorial explosion when a position has many possible substitutions. '
+                                     'Set very large to effectively disable (default: 3).'))
+    multi_mut_args.add_argument('--multi-output', default='mutated_sequences',
+                               help='Output directory for mutations (default: mutated_sequences)')
+    
     # Aggregation analysis arguments
     agg_args = parser.add_argument_group('AGGREGATION ANALYSIS')
     agg_args.add_argument('--agg-only', action='store_true',
@@ -1711,7 +2106,7 @@ def setup_argument_parser() -> argparse.ArgumentParser:
     # Output arguments
     output_args = parser.add_argument_group('OUTPUT')
     output_args.add_argument('-o', '--output', default='mutated_sequences.fasta',
-                            help='Output FASTA file (default: mutated_sequences.fasta)')
+                            help='Output FASTA file for single mutations (default: mutated_sequences.fasta)')
     output_args.add_argument('--no-original', action='store_true',
                             help='Do not include original sequence in output')
     
@@ -1728,17 +2123,47 @@ def print_help_info(parser: argparse.ArgumentParser):
     """Print detailed help information"""
     print("=" * 70)
     print("RULE-BASED IN SILICO MUTAGENESIS SCRIPT (WITH CLUSTERING)")
+    print("WITH MULTI-POINT MUTATION SUPPORT")
     print("=" * 70)
     print("\nDESCRIPTION:")
     print("Performs rule-based mutagenesis on protein sequences.")
     print("Rules apply ONLY when amino acids are clustered together.")
     print("Multiple rules can apply simultaneously to the same motif.")
     print("Motifs with multiple rule matches are flagged as aggregation hotspots.")
+    print("Supports generation of multi-point mutations (double, triple, etc.)")
     print("\n" + "=" * 70)
     
     print_usage_example()
     parser.print_help()
     
+    print("\n" + "=" * 70)
+    print("MULTI-POINT MUTATION FEATURES:")
+    print("=" * 70)
+    print("\nWhen --multi-mutations is specified, the script generates mutations at multiple")
+    print("levels and organizes them in a directory structure.")
+    print("\nCombinatorics control:")
+    print("  • --multi-top-per-position limits how many substitution variants are kept PER POSITION")
+    print("    (ranked by agg_score) before building multi-mutation combinations.")
+    print("  • This does NOT restrict which positions can be used; it only reduces combinatorial explosion")
+    print("    when a single position has many possible substitutions.")
+    print("  • To effectively disable limiting, set a very large value (e.g., --multi-top-per-position 9999).")
+    print("\nExample usage:")
+    print("  python AGGRESSOR.py protein.fasta --regions 10:30 -m P G D K --multi-mutations 2 3")
+    print("\nThis generates:")
+    print("  mutated_sequences/")
+    print("  ├── single_mutations.fasta")
+    print("  ├── double_mutations/")
+    print("  │   ├── single_region.fasta (2 mutations in same region)")
+    print("  │   ├── multi_region.fasta (2 mutations in different regions)")
+    print("  │   └── gatekeeping.fasta (2 gatekeeping mutations combined)")
+    print("  └── triple_mutations/")
+    print("      ├── single_region.fasta (3 mutations in same region)")
+    print("      ├── multi_region.fasta (3 mutations in different regions)")
+    print("      └── gatekeeping.fasta (3 gatekeeping mutations combined)")
+    print("\nCategorization Rules:")
+    print("  • single_region: All positions belong to the same input region")
+    print("  • multi_region: Positions span multiple different input regions (non-overlapping)")
+    print("  • gatekeeping: Combinations of gatekeeping amino acids only")
     print("\n" + "=" * 70)
     print("RULE DETAILS AND AGGREGATION SCORES:")
     print("=" * 70)
@@ -1807,6 +2232,29 @@ def validate_arguments(args) -> None:
         print("\nERROR: Both --insert-positions and --insert-aas must be provided together", file=sys.stderr)
         print("Example: --insert-positions 10 20 --insert-aas K M")
         sys.exit(1)
+    
+    # Validate multi-mutations argument
+    if args.multi_mutations:
+        if not isinstance(args.multi_mutations, list):
+            args.multi_mutations = [args.multi_mutations]
+        
+        # Check that all mutation levels are >= 2
+        for level in args.multi_mutations:
+            if level < 2:
+                print(f"\nERROR: Multi-mutation levels must be >= 2 (got {level})", file=sys.stderr)
+                sys.exit(1)
+        
+        if hasattr(args, 'multi_top_per_position'):
+            if args.multi_top_per_position is not None and args.multi_top_per_position < 1:
+                print("\nERROR: --multi-top-per-position must be >= 1", file=sys.stderr)
+                sys.exit(1)
+        
+        # Warn if very high mutation levels
+        if any(level > 6 for level in args.multi_mutations):
+            print("\nWARNING: High mutation levels (>6) may generate very large numbers of combinations")
+            print("This could consume significant memory and disk space.")
+        
+        logger.debug(f"Multi-mutation levels: {sorted(args.multi_mutations)}")
 
 def print_mutation_summary(mutations: List[Tuple[str, str]]):
     """Print summary of generated mutations"""
@@ -1896,6 +2344,102 @@ def print_mutation_summary(mutations: List[Tuple[str, str]]):
                 print(f"... and {len(mutation_data) - 10} more mutations")
             break
 
+
+def print_aggregation_summary(region_analyses: List[Dict], sequence: str):
+    """Print summary of aggregation analysis results"""
+    if not region_analyses:
+        print("\n" + "=" * 70)
+        print("AGGREGATION ANALYSIS RESULTS")
+        print("=" * 70)
+        print("\nNo regions analyzed. Specify regions with --regions")
+        return
+    
+    print("\n" + "=" * 70)
+    print("AGGREGATION ANALYSIS RESULTS")
+    print("=" * 70)
+    
+    total_hotspots = 0
+    total_multi_rule = 0
+    all_hotspot_positions = set()
+    
+    for analysis in region_analyses:
+        region_start, region_end = analysis['region']
+        clusters = analysis['merged_clusters']
+        multi_rule = analysis['multi_rule_clusters']
+        hotspots = analysis['aggregation_hotspots']
+        
+        print(f"\nREGION {region_start}:{region_end} ({region_end - region_start + 1} residues)")
+        print("-" * 70)
+        print(f"Sequence: {analysis['sequence']}")
+        print(f"Total clusters found: {len(clusters)}")
+        print(f"Aggregation hotspot positions: {', '.join(map(str, hotspots)) if hotspots else 'None'}")
+        
+        # Show rule-by-rule breakdown
+        print(f"\nRule Breakdown:")
+        for rule_name, rule_data in analysis['rules'].items():
+            if rule_data['condition_met']:
+                num_clusters = len(rule_data['qualifying_clusters'])
+                positions = rule_data['matching_positions']
+                print(f"  • {rule_name}: {num_clusters} cluster(s) at positions {positions}")
+        
+        # Show cluster details
+        if clusters:
+            print(f"\nDetailed Cluster Information:")
+            for i, cluster in enumerate(clusters, 1):
+                positions = cluster['positions']
+                residues = ''.join(cluster['residues'])
+                size = cluster['size']
+                span = cluster['span']
+                score = cluster.get('aggregation_score', cluster.get('combined_aggregation_score', 0))
+                rule = cluster.get('rule_name', ', '.join(cluster.get('rules', [])))
+                
+                print(f"  Cluster {i}:")
+                print(f"    Positions: {positions}")
+                print(f"    Residues:  {residues}")
+                print(f"    Size: {size}, Span: {span} aa")
+                print(f"    Rule(s): {rule}")
+                print(f"    Aggregation Score: {score}")
+        
+        # Highlight multi-rule clusters (highest risk)
+        if multi_rule:
+            print(f"\n⚠️  HIGH AGGREGATION RISK (Multi-Rule Clusters):")
+            for i, cluster in enumerate(multi_rule, 1):
+                positions = cluster['positions']
+                residues = ''.join(cluster['residues'])
+                rules = cluster['rules']
+                score = cluster['combined_aggregation_score']
+                
+                print(f"  Multi-Rule Cluster {i}:")
+                print(f"    Positions: {positions}")
+                print(f"    Residues:  {residues}")
+                print(f"    Converging Rules: {', '.join(rules)}")
+                print(f"    Combined Aggregation Score: {score}/8 (HIGHEST RISK)")
+        
+        total_hotspots += len(hotspots)
+        total_multi_rule += len(multi_rule)
+        all_hotspot_positions.update(hotspots)
+    
+    # Summary statistics
+    print("\n" + "=" * 70)
+    print("SUMMARY STATISTICS")
+    print("=" * 70)
+    print(f"Total regions analyzed: {len(region_analyses)}")
+    print(f"Total aggregation hotspot positions: {total_hotspots}")
+    print(f"Total multi-rule clusters (highest risk): {total_multi_rule}")
+    
+    if total_multi_rule > 0:
+        print(f"\n⚠️  ATTENTION: {total_multi_rule} high-risk region(s) detected!")
+        print("These regions match multiple aggregation rules simultaneously.")
+        print("Mutations in these areas are highly recommended for aggregation suppression.")
+    
+    if total_hotspots > 0:
+        print(f"\nRecommended mutation targets: {', '.join(map(str, sorted(all_hotspot_positions)))}")
+    else:
+        print("\nNo aggregation-prone hotspots detected in specified regions.")
+    
+    print("=" * 70)
+
+
 def main():
     """Main entry point with integrated optimizations."""
     parser = setup_argument_parser()
@@ -1922,6 +2466,9 @@ def main():
         logger.info(f"Input: {args.input_file}")
         logger.info(f"Sequence length: {len(sequence)} residues")
         
+        # Expand special region token(s) now that sequence length is known
+        args.regions = normalize_regions(args.regions, len(sequence))
+        
         if args.regions:
             logger.info(f"Regions to analyze: {args.regions}")
         if args.positions:
@@ -1945,9 +2492,47 @@ def main():
             
             logger.info(f"Generated {len(mutations)} mutations")
             
-            # Write output using existing function
-            write_fasta(args.output, header, sequence, mutations, not args.no_original)
-            logger.info(f"Results written to {args.output}")
+            # Determine output path
+            if args.multi_mutations:
+                # Use directory structure for multi-mutations
+                output_base = Path(args.multi_output)
+                output_base.mkdir(parents=True, exist_ok=True)
+                
+                # Write single mutations to single_mutations.fasta
+                single_output = output_base / 'single_mutations.fasta'
+                write_fasta(str(single_output), header, sequence, mutations, not args.no_original)
+                logger.info(f"Single mutations written to {single_output}")
+                
+                # Generate multi-point mutations
+                logger.info(f"Generating multi-point mutations (levels: {args.multi_mutations})")
+                multi_mutations = generate_multi_point_mutations(
+                    mutations,
+                    sequence,
+                    args.multi_mutations,
+                    regions=args.regions,
+                    top_variants_per_position=getattr(args, 'multi_top_per_position', 3)
+                )
+                
+                # Categorize multi-mutations
+                categorized = categorize_multi_mutations(multi_mutations, regions=args.regions)
+                
+                # Create output directory structure
+                create_output_directory(str(output_base), args.multi_mutations)
+                
+                # Write categorized multi-mutations
+                write_multi_mutations_by_category(
+                    str(output_base),
+                    header,
+                    sequence,
+                    categorized,
+                    include_original=not args.no_original
+                )
+                
+                logger.info(f"Multi-mutation results written to {output_base}")
+            else:
+                # Use original single output file
+                write_fasta(args.output, header, sequence, mutations, not args.no_original)
+                logger.info(f"Results written to {args.output}")
             
             print_mutation_summary(mutations)
         else:
@@ -1958,9 +2543,12 @@ def main():
                     start, stop = parse_region(region_str, len(sequence))
                     analysis = analyze_region(sequence, start, stop, selected_rules=args.rules)
                     region_analyses.append(analysis)
-                    logger.info(f"Region {start}:{stop}: {len(analysis['merged_clusters'])} clusters")
+                    logger.info(f"Region {start}:{stop}: {len(analysis['merged_clusters'])} clusters found")
             
             logger.info("Aggregation analysis completed")
+            
+            # Print summary of aggregation analysis
+            print_aggregation_summary(region_analyses, sequence)
         
         logger.info("=" * 70)
         logger.info("ANALYSIS COMPLETE")
