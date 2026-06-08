@@ -1,74 +1,144 @@
-# BHT_amyloid
-Данный проект посвящен анализу влияния аминокислотных замен на структурную стабильность белков в контексте амилоидогенности и выполнен в рамках Хакатона по Биоинформатике (2025).
-## Авторы: Владимир Свистак, Андрей Крюков, Егор Пивоваров, Дарья Янчик, Сергей Иванов, Ксения Суханова
-## Описание, цель и задачи проекта
-На данный момент наша работа связана с анализом классических и некоторых рибосомальных амилоидогенных белков, а именно **цель** нашей работы - **это провести интегративный вычислительный анализ для прогнозирования эффектов аминокислотных замен на амилоидогенность и структурную стабильность белков и модулирования региональной склонности этих белков к агрегации.**
+# AGGRESSOR
 
-Отсюда **задачи** нашего проекта выглядят следующим образом:
+**A**ggregation-**G**uided **G**eneration of **RE**gion-specific **S**ubstitution-**OR**iented mutations.
 
-**1. Картировать амилоидогенные регионы с разрешением до одного остатка**
+AGGRESSOR is a rule-based *in silico* mutagenesis toolkit for protein sequences,
+distributed as an installable Python package (the `aggressor/` package).
+It detects aggregation-prone regions (APRs), then generates single- and
+multi-point mutants designed to disrupt amyloidogenic potential, including
+gatekeeper substitutions in the residues flanking each APR.
 
-**2. Предскзаать точечные мутации, подавляющие амилоидные свойства исследуемых белков**
+Results are fully reproducible: the output is independent of the number of
+worker threads and of the Python hash seed.
 
-**3. Прояснить биофизические механизмы, обуславливающие изменения амилоидогенного потенциала**
+---
 
+## Installation
 
-### В данном репозитории представлены скрипты и файлы, написанные нами в ходе работы. Содержание репозитория и основные функции каждого из элементов перечислены ниже:
-### 1. Папка "аа"
-На данный момент папка содержит наброски по пайплайну для работы с молекулярной динамикой и альфафолдом, что будет необходимо для введения мутаций в структуру белка и проверку её влияния. Сейчас здесь находится скрипт для парсинга описания структур из SMILES нотации
-### 2. Папка "all"
-Папка содержит csv таблицы, в которых собраны результаты предсказания от различных предикторов амилоидогенности для исследуемых белков дикого типа, некоторых мутантных вариантов (mut), скрипты для визуализации распределения соответствующих скоров и графики (graphics), а также тепловые карты бинарного распределения попадания аминокислоты в амилоидогенный регион по версии каждого из предикторов (hm)
-### 3. Папка "api"
-Папка содержит python-скрипты, обеспечивающие непосредственный доступ к некоторым из предикторов, представленных в качестве веб-сервисов, в СLI формате (command-line interface)
-### 4. Папка "metascores"
-Содержит csv таблицы метаскоров для каждой аминокислоты в составе белка и мутантных вариантов. Все таблицы имеют унифицированный вид в виде следующего списка столбцов:
+### Files required to install
 
-aa - номер аминокислоты в белке начиная с N конца последовательности.
+Only these are needed to build and install the command-line tool:
 
-aa_name - название аминокислотного остатка в однобуквенной кодировке.
+| File / folder    | Purpose                                                          |
+| ---------------- | ---------------------------------------------------------------- |
+| `aggressor/`     | The Python package (all modules, see structure below).           |
+| `aggressor.toml` | Build configuration; the version is read from `__init__.py`.     |
+| `aggressor.sh`   | Installer: pulls from GitHub, falls back to local files.         |
 
-metascore_WT - метаскор, расчитанный по взвешенной формуле.
+> The build backend expects the configuration to be named `pyproject.toml`.
+> `aggressor.sh` handles this automatically by staging `aggressor.toml` as
+> `pyproject.toml` in a temporary build directory, so the source tree keeps the
+> `aggressor.toml` name and stays clean.
 
-metascore_A**B - метаскоры для АА в составе мутантных белков. Мутации записаны в стандартном виде (например P55A - замена пролина на лизин в 55 положении).
+### Recommended — install script
 
-**region(s)_for_analysis** (сейчас нет, но стоит добавить) - бинарная кодировка вхождения аминокислоты в консенсусный амилоидогенный регион
+```bash
+./aggressor.sh
+```
 
-Пример таблицы представлен на картинке ниже:
+The installer works in two stages:
 
-![photo_2026-01-06_18-03-46](https://github.com/user-attachments/assets/33bc5154-019c-4b4a-9656-78e34e412fd6)
+1. **GitHub (primary):** downloads the package (`aggressor.toml` + the
+   `aggressor/` package) from GitHub, builds a wheel, installs it, and then
+   **deletes every downloaded/temporary file**.
+2. **Local (fallback):** if the GitHub step fails (no network, bad ref, …), it
+   builds and installs from the local files next to the script. In this case
+   **all local files are preserved** and the built wheel is kept in a versioned
+   folder `aggressor_<version>/` (e.g. `aggressor_1.0.0/`).
 
-### 5. AGGRESSOR.py
+Useful environment variables:
 
-Программа для внесения мутаций в последовательность белка. Принимает на вход fasta файл с WT типом белка, а также требует разметку консенсусных регионов в качестве ключевого параметра. Далее по определённым правилам выявляет в составе этого региона аминокислоты, несущие наибольший амилоидогенный потенциал (хот-спот АК или бета-промотеры), после чего происходит мутация данный АК на бета-брейкерные мутации (то есть существенно понижающие амилоидогенный потенциал; это тоже происходит по определённым правилам). 
+```bash
+AGGRESSOR_REPO=https://github.com/<you>/aggressor.git ./aggressor.sh  # source repo
+AGGRESSOR_REF=v1.0.0 ./aggressor.sh                                   # branch / tag
+AGGRESSOR_LOCAL=1 ./aggressor.sh                                      # force local install
+PYTHON_BIN=python3.11 ./aggressor.sh                                  # choose the interpreter
+```
 
-В результате на выходе получается multifasta файл со всеми мутированными последовательностями + WT (по умолчанию также включается в файл), ранжированными по внутренней метрике (aggregation_score), определяемая взвешенным образом согласно тому, насколько "точно" конкретный регион соответствовал группе правил для определения амилодогенности.
+After installation the tool is available directly on the command line:
 
-### 6. PASTA_visual.py
+```bash
+aggressor --help
+```
 
-Скрипт для визуализации данных из PASTA (?)
+### Running without installing
 
-### 7. appnn_converter.R
+```bash
+python -m aggressor protein.fasta [options]      # run the package in-place
+python aggressor/main.py protein.fasta [options] # run the package bootstrap
+```
 
-R скрипт, посвященный получению результатов из APPNN - нейронной сети для предсказания амилодогенности, представленной в виде одноименного R пакета. Скрипт принимает на вход multifasta файл с последовательностями белков, прогоняет их через APPNN, и затем парсит результат. На выходе получается csv таблица с названием белка, средним значением скора, скорам по каждой аминокислоте (в таблице также представлены названия аминокислот) и хот-спот регионами, вносящими наибольший вклад в амилоидогенность. 
+---
 
-**NB! В ходе парсинга скрипт создает временный temp.csv файл, что стоит учитывать при использовании**
+## Package structure
 
-### 8. arch_cross_pasta_aggreplot_waltz_parser.ipynb
+```
+aggressor/
+├── __init__.py      # package version (single source of truth) + public API
+├── __main__.py      # enables `python -m aggressor`
+├── main.py          # bootstrap for `python aggressor/main.py`
+├── cli.py           # argument parsing, validation, pipeline orchestration
+├── config.py        # constants, amino-acid scales, logging setup
+├── models.py        # data structures (clusters, mutation types, results)
+├── rules.py         # aggregation rule evaluators
+├── clustering.py    # Union-Find cluster merging
+├── analysis.py      # region analysis + mutation-type classification
+├── mutagenesis.py   # single- and multi-point mutation generation
+├── sequtils.py      # sequence validation + region parsing
+├── fasta_io.py      # FASTA reading/writing + output directory layout
+└── reporting.py     # help text and human-readable summaries
+```
 
-Универсальный парсер для нескольких перечисленных в названии предикторов в формате jupyter notebook
+---
 
-### 9. path_converter.py
+## Generated paths and folders
 
-Парсер для предиктора PATH, работающего по механизму трединга (threading), устанавливающегося локально
+| Path                       | When                              | Contents                                                          |
+| -------------------------- | --------------------------------- | ----------------------------------------------------------------- |
+| `aggressor_<version>/`     | local install (`aggressor.sh`)    | The built wheel (e.g. `aggressor-1.0.0-py3-none-any.whl`). Not created for a GitHub install (temporary files are removed). |
+| `mutated_sequences.fasta`  | single-mutation mode              | All single-point mutants (override with `-o/--output`).           |
+| `mutated_sequences/`       | `--multi-mutations` mode          | Multi-point mutants, organized by level and category (see below). |
 
-### 10. wilcoxon.py
+Multi-mutation output layout (`--multi-output`, default `mutated_sequences/`):
 
-Скрипт для визуализации распределения метаскоров и дельта-метаскоров для белков и их мутантных вариантов.
+```
+mutated_sequences/
+├── double_mutations/
+│   ├── single_region.fasta
+│   ├── multi_region.fasta
+│   ├── all_gatekeeper.fasta
+│   ├── all_core.fasta
+│   └── mixed.fasta
+└── triple_mutations/
+    └── ...
+```
 
-Скрипт сначала анализирует распределение по всей длине последовательности (и строит соответствующие визуализации), затем анализирует конкретные регионы, показавшие наибольшее отличие по дельтаскору. Статистический анализ проводится по Вилкоксону и только для небольших регионов на основе дельтаскоров, поскольку данные в целом оказываются довольно разрешенными и представляют из себя по сути "zero-inflated" таблицы.
+---
 
-На вход скрипт принимает csv файл в том формате, в каком они представлены в папке metascores, после чего проводит визуализацию и статистический анализ, на выходе создает директорию со всеми файлами. 
+## Quick start
 
-**Детальный перечень файлов в директории, возможные субдиректории и пр. описано в REAMDE.txt файле, который также создается на выходе.*
+```bash
+# Rule-based mutagenesis over a region
+aggressor protein.fasta --regions 60:95
 
-**NB! Для анализа скрипту желательно (но необязятельно) передать на входе начало-конец консенсусных регионов для анализа. Если никакие регионы не указаны, то программа попытается их рассчитать по распределению дельтаскоров (иногда это может быть полезно, если мутация проявляет какой-либо "дальний" эффект). Параметры для расчета этих регионов можно варьировать в самом скрипте, они прописаны в её справке, которую можно вызвать в терминале***
+# Whole-sequence scan
+aggressor protein.fasta --regions all
+
+# Tune the gatekeeper zone and include internal merge-zone gatekeepers
+aggressor protein.fasta --regions 60:95 --gatekeeper-distance 3 --internal-gatekeepers
+
+# Double and triple mutants with parallel workers
+aggressor protein.fasta --regions 60:95 --multi-mutations 2 3 --threads 4
+```
+
+### Gatekeeper options
+
+- `--gatekeeper-distance N` — number of residues flanking each APR (on each
+  side) that are also mutated as part of the gatekeeper zone (default `3`;
+  `0` restricts mutations to cluster core positions only). Flanking positions
+  receive **only** gatekeeping substitutions (`-g`/`--gatekeeping`).
+- `--internal-gatekeepers` — also mutate the internal gap residues inside
+  merged clusters (the short zones between merged sub-clusters) as gatekeepers
+  (default: off).
+
+Run `aggressor --help` for the full option list.

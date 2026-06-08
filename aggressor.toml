@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aggressor"
+dynamic = ["version"]
+description = "Aggregation-Guided Generation of REgion-Specific Substitution ORiented mutations"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Authors: Egor Pivovarov, Vladimir Svystak, Andrey Krukov, Sergey Ivanov, Darya Yanchik, Xenia Sukhanova" }]
+keywords = ["bioinformatics", "amyloid", "aggregation", "mutagenesis", "protein"]
+dependencies = []
+
+[project.scripts]
+aggressor = "aggressor.cli:main"
+
+# Single source of truth for the version: aggressor/__init__.py (__version__).
+[tool.setuptools.dynamic]
+version = { attr = "aggressor.__version__" }
+
+[tool.setuptools]
+packages = ["aggressor"]
+
+[tool.setuptools.package-data]
+aggressor = ["*.fasta"]
