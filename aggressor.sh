@@ -27,7 +27,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 # GitHub source (override with env vars). Point AGGRESSOR_REPO at your fork.
-AGGRESSOR_REPO="${AGGRESSOR_REPO:-https://github.com/your-org/aggressor.git}"
+AGGRESSOR_REPO="${AGGRESSOR_REPO:-https://github.com/georgeegreat/BHT_amyloid.git}"
 AGGRESSOR_REF="${AGGRESSOR_REF:-main}"
 
 # --------------------------------------------------------------------------
