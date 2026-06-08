@@ -1,0 +1,27 @@
+# Python packaging / build artifacts
+build/
+dist/
+*.egg-info/
+aggressor_[0-9]*/        # versioned wheel folder produced by aggressor.sh
+*.whl
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# AGGRESSOR run outputs
+mutated_sequences.fasta
+mutated_sequences/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
