@@ -1,0 +1,106 @@
+"""Golden-file tests using reference tables."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from amyloid_wrappers.core.config import load_config
+from amyloid_wrappers.core.fasta import read_first_sequence
+from amyloid_wrappers.core.merge import merge_predictor_tables
+from amyloid_wrappers.core.schema import PREDICTOR_REGISTRY, PredictorResult
+from amyloid_wrappers.predictors.crossbeta import CrossBetaParser
+
+ROOT = Path(__file__).resolve().parents[2]
+BHT = ROOT / "BHT_amyloid"
+DATA = ROOT
+
+
+@pytest.fixture
+def rps2_sequence() -> tuple[str, str]:
+    fasta = DATA / "RPS2.fasta"
+    if not fasta.is_file():
+        pytest.skip("RPS2.fasta not available")
+    return read_first_sequence(fasta)
+
+
+def _reference_table_to_results(
+    table: pd.DataFrame,
+    *,
+    protein_id: str,
+    sequence: str,
+) -> list[PredictorResult]:
+    results: list[PredictorResult] = []
+    for spec in PREDICTOR_REGISTRY.values():
+        score_col, bin_col = spec.score_column, spec.bin_column
+        if score_col not in table.columns or bin_col not in table.columns:
+            continue
+        results.append(
+            PredictorResult(
+                protein_id=protein_id,
+                sequence=sequence,
+                spec=spec,
+                scores=[float(x) for x in table[score_col]],
+                binary=[int(x) for x in table[bin_col]],
+            )
+        )
+    return results
+
+
+def _load_reference_scores(path: Path) -> pd.DataFrame:
+    """Load score columns from wide or historical BHT reference CSV."""
+    df = pd.read_csv(path)
+    if "position" in df.columns:
+        return df
+    return pd.read_csv(path, index_col=0)
+
+
+def test_golden_merge_roundtrip_rps2(rps2_sequence: tuple[str, str]) -> None:
+    """Re-merge predictor columns from BHT reference → identical wide scores."""
+    ref_path = BHT / "all" / "RPS2_human_all.csv"
+    if not ref_path.is_file():
+        pytest.skip("Reference all CSV not available")
+
+    protein_id, sequence = rps2_sequence
+    ref = _load_reference_scores(ref_path)
+    assert len(ref) == len(sequence)
+
+    results = _reference_table_to_results(ref, protein_id=protein_id, sequence=sequence)
+    assert len(results) >= 7
+
+    wide = merge_predictor_tables(results)
+    score_cols = [c for c in ref.columns if c.endswith("_score")]
+    for col in score_cols:
+        np.testing.assert_allclose(
+            wide[col].values,
+            ref[col].values,
+            rtol=1e-9,
+            atol=1e-9,
+            err_msg=col,
+        )
+
+
+def test_golden_crossbeta_rpl27_json() -> None:
+    json_path = DATA / "RPL27 and RPL36" / "Cross-beta predictor" / "RPL27.json"
+    if not json_path.is_file():
+        pytest.skip("RPL27 cross-beta JSON not available")
+
+    import json
+
+    payload = json.loads(json_path.read_text())
+    first_key = next(iter(payload))
+    sequence = "".join(item["amino_acid"] for item in payload[first_key][0]["AA_list"])
+
+    result = CrossBetaParser().parse(json_path, protein_id="RPL27", sequence=sequence)
+    assert result.length == len(sequence)
+    assert result.scores[0] == pytest.approx(0.7143500706559989)
+    assert result.binary[0] == 1
+
+
+def test_config_weights_sum_to_one() -> None:
+    cfg = load_config()
+    total = sum(cfg.metascore.weights.values())
+    assert 0.999 <= total <= 1.001
