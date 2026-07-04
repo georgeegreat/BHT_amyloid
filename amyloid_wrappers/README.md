@@ -4,14 +4,6 @@ Installable Python package that normalises per-residue outputs from amyloidogeni
 predictors into one schema (`position`, `aa_name`, `{Tool}_score`, `{Tool}_bin`) and
 merges them into wide CSV tables for metascores and downstream analysis.
 
-```
-Amyloids_data/
-├── amyloid_wrappers/     ← this package
-├── BHT_amyloid/          ← hackathon scripts and reference CSVs
-├── aggressor/
-└── metascores/
-```
-
 ## Install
 
 ```bash
