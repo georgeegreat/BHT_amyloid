@@ -34,36 +34,6 @@ python -m amyloid_wrappers parse --help
 python -m amyloid_wrappers merge --help
 python -m amyloid_wrappers run --help
 ```
-
-### Troubleshooting pytest
-
-| Symptom | Cause | Fix |
-|---------|--------|-----|
-| `No module named 'amyloid_wrappers'` | `pytest` is not from your env | `pip install -e ".[test]"` then `python -m pytest` |
-| `No module named 'pandas'` | Same — system pytest (e.g. `apt install python3-pytest`) | Do **not** use `sudo apt install pytest`; use `pip install -e ".[test]"` |
-| `amyloid-parse: command not found` | Package not installed in active env | `pip install -e ".[test]"` and check `which amyloid-parse` |
-
-If `which pytest` shows `/usr/bin/pytest`, uninstall the apt package or always run:
-
-```bash
-python -m pytest
-```
-
-## Phase 0 checklist
-
-| Goal | Status | Location |
-|------|--------|----------|
-| `PredictorResult` + wide merge | done | `core/schema.py`, `core/merge.py` |
-| Parsers from notebook (+ PATH) | done | `predictors/*.py` |
-| `amyloid-merge` CLI | done | `cli/merge.py` |
-| Raw-output cache | done | `core/cache.py` |
-| Predictor weights in config | done | `config/predictors.toml` |
-| Golden tests vs BHT reference | done | `tests/test_golden.py` |
-| PATH / APPNN runners | done | `runners/`, `cli/run.py`, `legacy/` |
-| Web-tool runners (WALTZ, …) | phase 2–3 | `legacy/api/` reference scripts |
-
----
-
 ## Configuration (`config/predictors.toml`)
 
 All tunable weights and thresholds live in one file. Override path:
