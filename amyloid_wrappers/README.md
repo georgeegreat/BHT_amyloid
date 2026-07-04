@@ -46,9 +46,9 @@ amyloid-parse waltz ... --config /path/to/predictors.toml
 ### `[metascore.weights]`
 
 Per-predictor weights for the linear metascore (sum must be **1.0**). Keys match the
-registry (`path`, `appnn`, `crossbeta`, …). Used by `core/metascore.py` (phase 5).
+registry (`path`, `appnn`, `crossbeta`, …). Used by `core/metascore.py`.
 
-Default: equal weights `0.125` × 8. To fit weights against existing hackathon tables:
+Default: equal weights `0.125` × 8. To fit weights against existing tables:
 
 ```bash
 python scripts/calibrate_weights.py \
