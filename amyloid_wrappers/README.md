@@ -4,6 +4,14 @@ Installable Python package that normalises per-residue outputs from amyloidogeni
 predictors into one schema (`position`, `aa_name`, `{Tool}_score`, `{Tool}_bin`) and
 merges them into wide CSV tables for metascores and downstream analysis.
 
+```
+Amyloids_data/
+├── amyloid_wrappers/     ← this package
+├── BHT_amyloid/          ← hackathon scripts and reference CSVs
+├── aggressor/
+└── metascores/
+```
+
 ## Install
 
 ```bash
@@ -34,6 +42,36 @@ python -m amyloid_wrappers parse --help
 python -m amyloid_wrappers merge --help
 python -m amyloid_wrappers run --help
 ```
+
+### Troubleshooting pytest
+
+| Symptom | Cause | Fix |
+|---------|--------|-----|
+| `No module named 'amyloid_wrappers'` | `pytest` is not from your env | `pip install -e ".[test]"` then `python -m pytest` |
+| `No module named 'pandas'` | Same — system pytest (e.g. `apt install python3-pytest`) | Do **not** use `sudo apt install pytest`; use `pip install -e ".[test]"` |
+| `amyloid-parse: command not found` | Package not installed in active env | `pip install -e ".[test]"` and check `which amyloid-parse` |
+
+If `which pytest` shows `/usr/bin/pytest`, uninstall the apt package or always run:
+
+```bash
+python -m pytest
+```
+
+## Phase 0 checklist
+
+| Goal | Status | Location |
+|------|--------|----------|
+| `PredictorResult` + wide merge | done | `core/schema.py`, `core/merge.py` |
+| Parsers from notebook (+ PATH) | done | `predictors/*.py` |
+| `amyloid-merge` CLI | done | `cli/merge.py` |
+| Raw-output cache | done | `core/cache.py` |
+| Predictor weights in config | done | `config/predictors.toml` |
+| Golden tests vs BHT reference | done | `tests/test_golden.py` |
+| PATH / APPNN runners | done | `runners/`, `cli/run.py`, `legacy/` |
+| Web-tool runners (WALTZ, …) | phase 2–3 | `legacy/api/` reference scripts |
+
+---
+
 ## Configuration (`config/predictors.toml`)
 
 All tunable weights and thresholds live in one file. Override path:
@@ -46,9 +84,9 @@ amyloid-parse waltz ... --config /path/to/predictors.toml
 ### `[metascore.weights]`
 
 Per-predictor weights for the linear metascore (sum must be **1.0**). Keys match the
-registry (`path`, `appnn`, `crossbeta`, …). Used by `core/metascore.py`.
+registry (`path`, `appnn`, `crossbeta`, …). Used by `core/metascore.py` (phase 5).
 
-Default: equal weights `0.125` × 8. To fit weights against existing tables:
+Default: equal weights `0.125` × 8. To fit weights against existing hackathon tables:
 
 ```bash
 python scripts/calibrate_weights.py \

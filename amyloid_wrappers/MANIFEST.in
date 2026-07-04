@@ -1,0 +1,2 @@
+include legacy/**
+include config/**

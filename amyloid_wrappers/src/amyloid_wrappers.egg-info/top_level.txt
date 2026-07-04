@@ -1,1 +1,4 @@
-amyloid_wrappers
+cli
+core
+predictors
+runners

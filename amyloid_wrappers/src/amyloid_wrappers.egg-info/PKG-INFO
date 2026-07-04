@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: amyloid-wrappers
-Version: 0.1.0
+Version: 0.2.0
 Summary: Unified wrappers and parsers for amyloidogenicity predictors
 Author: BHT Amyloid Team
 License: MIT
@@ -12,6 +12,7 @@ Classifier: Programming Language :: Python :: 3 :: Only
 Classifier: Topic :: Scientific/Engineering :: Bio-Informatics
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: pandas>=2.0
 Requires-Dist: numpy>=1.24
 Requires-Dist: tomli>=2.0; python_version < "3.11"
@@ -21,12 +22,13 @@ Provides-Extra: dev
 Requires-Dist: amyloid-wrappers[test]; extra == "dev"
 Requires-Dist: ruff>=0.4; extra == "dev"
 Requires-Dist: build>=1.2; extra == "dev"
+Dynamic: license-file
 
 # amyloid-wrappers
 
 Installable Python package that normalises per-residue outputs from amyloidogenicity
-predictors into one schema and merges them into the `*_all.csv` tables used downstream
-(metascores, visualisation, Wilcoxon analysis).
+predictors into one schema (`position`, `aa_name`, `{Tool}_score`, `{Tool}_bin`) and
+merges them into wide CSV tables for metascores and downstream analysis.
 
 ```
 Amyloids_data/
@@ -60,9 +62,11 @@ python -m amyloid_wrappers -h    # same
 
 amyloid-parse --help             # parse one predictor
 amyloid-merge --help             # merge standard CSVs
+amyloid-run --help               # run PATH / APPNN (Phase 1)
 
 python -m amyloid_wrappers parse --help
 python -m amyloid_wrappers merge --help
+python -m amyloid_wrappers run --help
 ```
 
 ### Troubleshooting pytest
@@ -83,14 +87,14 @@ python -m pytest
 
 | Goal | Status | Location |
 |------|--------|----------|
-| `PredictorResult` + merge → `*_all.csv` | done | `core/schema.py`, `core/merge.py` |
+| `PredictorResult` + wide merge | done | `core/schema.py`, `core/merge.py` |
 | Parsers from notebook (+ PATH) | done | `predictors/*.py` |
 | `amyloid-merge` CLI | done | `cli/merge.py` |
-| Raw-output cache | done | `core/cache.py`, `amyloid-parse --no-cache` |
+| Raw-output cache | done | `core/cache.py` |
 | Predictor weights in config | done | `config/predictors.toml` |
-| Golden tests vs `all/` | done | `tests/test_golden.py` |
-
-Runners (PATH binary, APPNN/R, web tools) are **phase 1+**.
+| Golden tests vs BHT reference | done | `tests/test_golden.py` |
+| PATH / APPNN runners | done | `runners/`, `cli/run.py`, `legacy/` |
+| Web-tool runners (WALTZ, …) | phase 2–3 | `legacy/api/` reference scripts |
 
 ---
 
@@ -112,7 +116,7 @@ Default: equal weights `0.125` × 8. To fit weights against existing hackathon t
 
 ```bash
 python scripts/calibrate_weights.py \
-  --all-csv ../BHT_amyloid/all/RPS2_human_all.csv \
+  --merged-csv merged/RPS2_merged.csv \
   --metascore-csv ../BHT_amyloid/metascores/RPS2_metascore_table.csv
 ```
 
@@ -121,6 +125,12 @@ Paste the printed snippet into `[metascore.weights]`.
 ### `[predictors.*]`
 
 Parser thresholds (binarisation cutoffs). CLI `--threshold` overrides for a single run.
+
+### `[runners.path]` / `[runners.appnn]`
+
+External tool paths for `amyloid-run`. Set `path.script` to `path1.1py` from
+[PATH](https://github.com/KubaWojciechowski/PATH) or `AMYLOID_PATH_SCRIPT`.
+APPNN defaults to `legacy/appnn_converter.R` in this package.
 
 ### `[cache]`
 
@@ -137,21 +147,19 @@ Layout: `cache/{protein_id}/{predictor}/raw.{ext}`
 
 ```
 FASTA / raw predictor output
-        ↓  amyloid-parse
+        ↓  amyloid-run (PATH, APPNN) or manual tool + amyloid-parse
 standard CSV per predictor   (+ optional raw cache)
         ↓  amyloid-merge
-wide CSV  or  legacy *_all.csv
+wide CSV (position, aa_name, all predictors)
         ↓  metascore (phase 5)
 metascores/*_metascore.csv
 ```
 
 ---
 
-## Canonical output formats
+## Canonical output format
 
-### Standard CSV (per predictor)
-
-Written by `amyloid-parse` / `PredictorResult.to_csv()`:
+All tools write the same per-residue schema:
 
 | Column | Description |
 |--------|-------------|
@@ -160,17 +168,7 @@ Written by `amyloid-parse` / `PredictorResult.to_csv()`:
 | `{Tool}_score` | Continuous score (see predictor section) |
 | `{Tool}_bin` | 0/1 amyloid call |
 
-### Legacy `*_all.csv`
-
-From `amyloid-merge --legacy` (compatible with `BHT_amyloid/all/visualize.py`):
-
-- unnamed index = `position − 1`
-- column `aa` = sequence length (not residue number)
-- pairs `{predictor}_score`, `{predictor}_bin` only
-
-### Wide CSV
-
-From `amyloid-merge` without `--legacy`: `position`, `aa_name`, all predictor columns.
+Merged tables add columns from each predictor while keeping `position` and `aa_name`.
 
 ---
 
@@ -192,16 +190,27 @@ amyloid-parse path --results results.csv --fasta RPS2.fasta -o RPS2_PATH.csv
 | `--no-cache` | Skip raw cache copy |
 | `--cache-dir` | Override `[cache].root` |
 
+### `amyloid-run` (Phase 1)
+
+```bash
+amyloid-run appnn --fasta RPS2.fasta -o RPS2_APPNN.csv
+amyloid-run path --fasta RPS2.fasta -o RPS2_PATH.csv --work-dir ./path_work
+
+# Parse existing raw output without running the tool:
+amyloid-run path --skip-run --results results.csv --fasta RPS2.fasta -o out.csv
+amyloid-run appnn --skip-run --input APPNN_parsed/RPS2_APPNN.csv --fasta RPS2.fasta -o out.csv
+```
+
+PATH threading is slow — use `--skip-run` in CI or when `results.csv` already exists.
+
 ### `amyloid-merge`
 
 ```bash
-amyloid-merge parsed/*.csv -o merged_wide.csv --fasta RPS2.fasta
-amyloid-merge parsed/*.csv -o ../BHT_amyloid/all/RPS2_human_all.csv --legacy --fasta RPS2.fasta
+amyloid-merge parsed/*.csv -o merged.csv --fasta RPS2.fasta
 ```
 
 | Flag | Purpose |
 |------|---------|
-| `--legacy` | Write historical `*_all.csv` layout |
 | `--predictor` | Force type per input file (if filename ambiguous) |
 | `--fasta` | Validate identical sequence across inputs |
 
@@ -220,7 +229,7 @@ Thresholds default from `config/predictors.toml`.
 | **Algorithm** | Best (min) DOPE per hexapeptide → normalise to [0,1] with inversion → sliding window (6 aa) mean → per-residue score |
 | **`PATH_score`** | Normalised per-residue score (0 = no hexapeptide coverage) |
 | **`PATH_bin`** | 1 if score ≥ global percentile (default 75th of all hexapeptide scores) |
-| **CLI** | `amyloid-parse path --results results.csv --fasta protein.fasta -o out.csv` |
+| **CLI** | `amyloid-run path …` or `amyloid-parse path --results results.csv …` |
 
 ### `appnn` — APPNN (R package output)
 
@@ -287,17 +296,18 @@ Registered in schema for column names in merge only. Parser TBD.
 ```python
 from amyloid_wrappers.core.config import load_config
 from amyloid_wrappers.core.cache import store_raw_cache
-from amyloid_wrappers.core.merge import merge_predictor_tables, write_legacy_all_csv
+from amyloid_wrappers.core.merge import merge_predictor_tables, write_merge_csv
 from amyloid_wrappers.core.metascore import compute_weighted_metascore
 from amyloid_wrappers.predictors.registry import get_parser
+from amyloid_wrappers.runners.registry import get_runner
 
 cfg = load_config()
 waltz = get_parser("waltz").parse("APP.dat", protein_id="APP", sequence=seq)
-store_raw_cache("APP", "waltz", "APP.dat", config=cfg)
+appnn = get_runner("appnn").run(fasta="RPS2.fasta", skip_run=True, raw_csv="…")
 
-wide = merge_predictor_tables([waltz, ...])
+wide = merge_predictor_tables([waltz, appnn])
 meta = compute_weighted_metascore(wide, config=cfg)
-write_legacy_all_csv(wide, "APP_human_all.csv")
+write_merge_csv([waltz, appnn], "merged.csv")
 ```
 
 ---
@@ -321,12 +331,14 @@ Do not rely on a system-wide `pytest` from `apt` — it uses a different Python 
 
 ```
 amyloid_wrappers/
-├── config/predictors.toml    weights, thresholds, cache
+├── config/predictors.toml    weights, thresholds, cache, runners
+├── legacy/                   frozen BHT reference scripts (see legacy/README.md)
 ├── scripts/calibrate_weights.py
 ├── src/amyloid_wrappers/
 │   ├── core/                 schema, config, cache, fasta, merge, metascore
-│   ├── predictors/           one module per tool
-│   └── cli/                  amyloid-parse, amyloid-merge
+│   ├── predictors/           parse-only modules
+│   ├── runners/              PATH / APPNN execution (Phase 1)
+│   └── cli/                  parse, merge, run, app
 └── tests/
 ```
 
@@ -336,7 +348,7 @@ amyloid_wrappers/
 
 | Old file | Replacement |
 |----------|-------------|
-| `arch_cross_...ipynb` | `amyloid-parse` / `scripts/parse_predictor.py` |
-| `path_converter.py` | `amyloid-parse path` (+ APR export stays in legacy script) |
-| `appnn_converter.R` | R runner → `amyloid-parse appnn` |
-| `all/visualize.py` | reads `*_all.csv` from `--legacy` merge |
+| `arch_cross_...ipynb` | `amyloid-parse` / `legacy/` copy |
+| `path_converter.py` | `legacy/path_converter.py`, `runners/path.py`, `predictors/path.py` |
+| `appnn_converter.R` | `legacy/appnn_converter.R`, `runners/appnn.py` |
+| `all/*_all.csv` | wide merge via `amyloid-merge` (same score columns) |
