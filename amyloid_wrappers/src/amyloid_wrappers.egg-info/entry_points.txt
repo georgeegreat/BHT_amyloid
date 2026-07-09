@@ -1,5 +1,0 @@
-[console_scripts]
-amyloid-merge = amyloid_wrappers.cli.merge:main
-amyloid-parse = amyloid_wrappers.cli.parse:main
-amyloid-run = amyloid_wrappers.cli.run:main
-amyloid-wrappers = amyloid_wrappers.cli.app:main
