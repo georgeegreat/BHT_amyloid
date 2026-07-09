@@ -1,6 +1,6 @@
 """Amyloid predictor wrappers — unified parsing and aggregation."""
 
-__version__ = "0.2.0"
+__version__ = "0.2.4"
 
 from amyloid_wrappers.core.config import load_config
 from amyloid_wrappers.core.merge import merge_predictor_tables, write_merge_csv

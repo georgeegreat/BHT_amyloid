@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amyloid-wrappers"
-version = "0.2.0"
+version = "0.2.4"
 description = "Unified wrappers and parsers for amyloidogenicity predictors"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,18 +23,23 @@ classifiers = [
 dependencies = [
     "pandas>=2.0",
     "numpy>=1.24",
-    "tomli>=2.0; python_version < '3.11'",
+    "biopython>=1.80",
+    "scikit-learn>=1.3",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
 dev = ["amyloid-wrappers[test]", "ruff>=0.4", "build>=1.2"]
+all = ["amyloid-wrappers[test]"]
+
+# Runtime pip deps are also listed in requirements.txt (used by environment.yml).
 
 [project.scripts]
 amyloid-wrappers = "amyloid_wrappers.cli.app:main"
 amyloid-parse = "amyloid_wrappers.cli.parse:main"
 amyloid-merge = "amyloid_wrappers.cli.merge:main"
 amyloid-run = "amyloid_wrappers.cli.run:main"
+amyloids-widemerge = "amyloid_wrappers.cli.widemerge:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

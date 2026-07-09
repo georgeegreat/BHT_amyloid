@@ -35,9 +35,10 @@ def test_path_runner_skip_run(tiny_fasta: Path) -> None:
     assert list(df.columns) == ["position", "aa_name", "PATH_score", "PATH_bin"]
 
 
-def test_path_runner_requires_script_when_not_skip_run(tiny_fasta: Path) -> None:
-    runner = PATHRunner(script="")
-    with pytest.raises(RuntimeError, match="PATH script not configured"):
+def test_path_runner_requires_script_when_not_skip_run(tiny_fasta: Path, tmp_path: Path) -> None:
+    missing = tmp_path / "missing_path1.1.py"
+    runner = PATHRunner(script=str(missing))
+    with pytest.raises(FileNotFoundError, match="PATH script not found"):
         runner.run(fasta=tiny_fasta)
 
 

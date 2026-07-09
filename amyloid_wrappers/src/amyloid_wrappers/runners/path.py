@@ -10,16 +10,17 @@ from pathlib import Path
 
 from amyloid_wrappers.core.fasta import read_first_sequence
 from amyloid_wrappers.core.schema import PredictorResult
+from amyloid_wrappers.paths import DEFAULT_PATH_SCRIPT
 from amyloid_wrappers.predictors.path import PATHParser
 from amyloid_wrappers.runners.base import BasePredictorRunner
 
 
 class PATHRunner(BasePredictorRunner):
     """
-    Run the PATH tool (``python path1.1py -f FASTA -o work_dir``) then parse
+    Run the PATH tool (``python path1.1.py -f FASTA -o work_dir``) then parse
     ``results.csv`` into standard columns.
 
-    Configure via ``[runners.path]`` in predictors.toml or env
+    Configure via ``[runners.path]`` in config.cfg or env
     ``AMYLOID_PATH_SCRIPT``.
     """
 
@@ -32,11 +33,16 @@ class PATHRunner(BasePredictorRunner):
         threshold_percentile: float = 75.0,
         timeout_seconds: int | None = None,
     ) -> None:
-        self.script = script or os.environ.get("AMYLOID_PATH_SCRIPT", "")
-        self.python = python
+        self.script = script or os.environ.get("AMYLOID_PATH_SCRIPT") or str(DEFAULT_PATH_SCRIPT)
+        self.python = os.environ.get("AMYLOID_PATH_PYTHON") or python
         self.results_filename = results_filename
+        self.last_raw_path: Path | None = None
         self.threshold_percentile = threshold_percentile
-        self.timeout_seconds = timeout_seconds or None
+        self.timeout_seconds = int(timeout_seconds) if timeout_seconds else None
+
+    def execute(self, fasta_path: Path, work_dir: str | Path) -> Path:
+        """Run PATH on ``fasta_path`` and return ``results.csv`` path."""
+        return self._execute_path(fasta_path, work_dir)
 
     def run(
         self,
@@ -59,6 +65,7 @@ class PATHRunner(BasePredictorRunner):
         else:
             raw_path = self._execute_path(fasta_path, work_dir)
 
+        self.last_raw_path = raw_path
         parser = PATHParser(threshold_percentile=self.threshold_percentile)
         return parser.parse(
             raw_path,
@@ -73,8 +80,8 @@ class PATHRunner(BasePredictorRunner):
     ) -> Path:
         if not self.script:
             raise RuntimeError(
-                "PATH script not configured. Set [runners.path].script in predictors.toml "
-                "or AMYLOID_PATH_SCRIPT to path1.1py from https://github.com/KubaWojciechowski/PATH"
+                "PATH script not configured and bundled vendor/PATH/path1.1.py is missing. "
+                "Set [runners.path].script in config.cfg or AMYLOID_PATH_SCRIPT."
             )
 
         script_path = Path(self.script)
@@ -94,12 +101,13 @@ class PATHRunner(BasePredictorRunner):
             subprocess.run(
                 cmd,
                 check=True,
-                capture_output=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 text=True,
                 timeout=self.timeout_seconds,
             )
         except subprocess.CalledProcessError as exc:
-            msg = exc.stderr or exc.stdout or str(exc)
+            msg = (exc.stderr or "").strip() or str(exc)
             raise RuntimeError(f"PATH failed: {msg}") from exc
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(

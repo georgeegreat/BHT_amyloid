@@ -58,6 +58,16 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_main(rest)
 
+    if command == "widemerge":
+        from amyloid_wrappers.cli.widemerge import main as widemerge_main
+
+        return widemerge_main(rest)
+
+    if command == "batch":
+        from amyloid_wrappers.cli.batch import main as batch_main
+
+        return batch_main(rest)
+
     print(f"amyloid_wrappers: unknown command {command!r}", file=sys.stderr)
     print("Run 'python -m amyloid_wrappers --help' for available commands.", file=sys.stderr)
     return 2
@@ -65,22 +75,29 @@ def main(argv: list[str] | None = None) -> int:
 
 _ROOT_EPILOG = """
 commands (also available as standalone scripts):
-  parse    amyloid-parse   Raw predictor file → standard per-residue CSV
-  merge    amyloid-merge   Standard CSVs → wide merged table
-  run      amyloid-run     Execute PATH/APPNN → standard CSV (Phase 1)
+  parse      amyloid-parse       Raw predictor file → standard per-residue CSV
+  merge      amyloid-merge       Standard CSVs → wide merged table
+  run        amyloid-run         Execute PATH/APPNN → standard CSV (Phase 1)
+  widemerge  amyloids-widemerge  Merge + optional BHT reference validation
+  batch      wrappers_run.py     Multifasta → predictors → wide CSV per protein
 
 usage:
   python -m amyloid_wrappers --help
   python -m amyloid_wrappers parse --help
   python -m amyloid_wrappers merge --help
   python -m amyloid_wrappers run --help
+  python -m amyloid_wrappers widemerge --help
+  python -m amyloid_wrappers batch --help
 
   amyloid-run appnn --fasta protein.fasta -o APPNN.csv
+  python -m amyloid_wrappers batch proteins.fasta -o results/ --batch-size 5
   amyloid-parse waltz --input protein.dat --fasta protein.fasta -o out.csv
   amyloid-merge parsed/*.csv -o merged.csv --fasta protein.fasta
+  amyloids-widemerge --input-dir parsed/ -o merged.csv --fasta protein.fasta \\
+      --reference ../all/RPS2_human_all.csv
 
 configuration:
-  config/predictors.toml     weights, thresholds, cache (override via --config)
+  config.cfg                 weights, thresholds, cache, runners (override via --config)
   AMYLOID_WRAPPERS_CONFIG     environment variable for config path
 
 documentation:

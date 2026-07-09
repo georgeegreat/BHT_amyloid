@@ -7,7 +7,7 @@ Usage:
       --merged-csv merged/RPS2_merged.csv \\
       --metascore-csv ../BHT_amyloid/metascores/RPS2_metascore_table.csv
 
-Prints TOML snippet for [metascore.weights] to stdout.
+Prints a config snippet for config.cfg to stdout.
 """
 
 from __future__ import annotations
@@ -19,11 +19,12 @@ import numpy as np
 import pandas as pd
 
 from amyloid_wrappers.core.schema import PREDICTOR_REGISTRY
+from amyloid_wrappers.core.validate import load_reference_table
 
 
 def main() -> int:
     args = parse_args()
-    merged_df = load_merged_scores(args.merged_csv)
+    merged_df = load_reference_table(args.merged_csv)
     meta = pd.read_csv(args.metascore_csv)
 
     wt_col = next(c for c in meta.columns if "metascore" in c.lower() and "wt" in c.lower())
@@ -43,7 +44,7 @@ def main() -> int:
         raise SystemExit("Regression produced zero weights")
     weights = weights / weights.sum()
 
-    print("# Paste into config/predictors.toml [metascore.weights]")
+    print("# Paste into config.cfg under [metascore.presets.<name>]")
     for key, weight in zip(keys, weights, strict=True):
         print(f"{key} = {weight:.6f}")
     pred = x @ weights
@@ -54,12 +55,7 @@ def main() -> int:
 
 def load_merged_scores(path: Path) -> pd.DataFrame:
     """Load wide merged CSV or historical BHT reference table."""
-    df = pd.read_csv(path)
-    if "position" in df.columns:
-        return df
-    if df.columns[0] == "Unnamed: 0" or df.columns[0] == "":
-        return pd.read_csv(path, index_col=0)
-    return df
+    return load_reference_table(path)
 
 
 def parse_args() -> argparse.Namespace:

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import sys
 
-from amyloid_wrappers.core.cache import store_raw_cache
+from amyloid_wrappers.core.cache import clear_cache_dir, store_raw_cache
 from amyloid_wrappers.core.config import load_config
 from amyloid_wrappers.runners.registry import get_runner, list_runners
 
@@ -39,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        help="Path to predictors.toml",
+        help="Path to config.cfg",
     )
     parser.add_argument(
         "--protein-id",
@@ -64,9 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="APPNN per-protein CSV (with --skip-run for appnn)",
     )
     parser.add_argument(
-        "--no-cache",
+        "--keep-cache",
         action="store_true",
-        help="Do not copy raw tool output to cache/",
+        help="Keep cache/{protein_id}/{predictor}/ after run (default: remove cache/)",
     )
     parser.add_argument(
         "--threshold",
@@ -100,17 +99,22 @@ def main(argv: list[str] | None = None) -> int:
     result = runner.run(**run_kwargs)
     result.to_csv(args.output)
 
-    if not args.no_cache:
-        raw_source = args.results or args.raw_input
+    if args.keep_cache:
+        raw_source = args.results or args.raw_input or getattr(runner, "last_raw_path", None)
         if raw_source:
             cached = store_raw_cache(
                 result.protein_id,
                 args.predictor,
                 raw_source,
                 config=cfg,
+                force=True,
             )
             if cached:
                 print(f"Cached raw input → {cached}")
+    else:
+        removed = clear_cache_dir(cfg)
+        if removed:
+            print(f"[cleanup] removed {removed}")
 
     print(f"Wrote {args.output} ({result.length} residues, {result.spec.display_name})")
     return 0
@@ -140,8 +144,9 @@ examples:
   amyloid-run path --skip-run --results results.csv --fasta RPS2.fasta -o out.csv
   amyloid-run appnn --skip-run --input APPNN_parsed/RPS2_APPNN.csv --fasta RPS2.fasta -o out.csv
 
-configuration ([runners.path] / [runners.appnn] in predictors.toml):
-  path.script          path to path1.1py (or AMYLOID_PATH_SCRIPT)
+configuration ([runners.path] / [runners.appnn] in config.cfg):
+  path.script          vendor/PATH/path1.1.py (default) or AMYLOID_PATH_SCRIPT
+  path.python          python with modeller+pyrosetta (AMYLOID_PATH_PYTHON)
   appnn.converter_script   defaults to package legacy/appnn_converter.R
 
 notes:

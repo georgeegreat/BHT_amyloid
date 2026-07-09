@@ -8,20 +8,23 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from amyloid_wrappers.core.config import load_config
+from amyloid_wrappers.core.config import load_config, list_metascore_presets
 from amyloid_wrappers.core.fasta import read_first_sequence
 from amyloid_wrappers.core.merge import merge_predictor_tables
 from amyloid_wrappers.core.schema import PREDICTOR_REGISTRY, PredictorResult
+from amyloid_wrappers.core.validate import load_reference_table
+from amyloid_wrappers.paths import bht_reference_root
 from amyloid_wrappers.predictors.crossbeta import CrossBetaParser
 
-ROOT = Path(__file__).resolve().parents[2]
-BHT = ROOT / "BHT_amyloid"
-DATA = ROOT
+DATA = Path(__file__).resolve().parents[2]
+BHT = bht_reference_root()
 
 
 @pytest.fixture
 def rps2_sequence() -> tuple[str, str]:
     fasta = DATA / "RPS2.fasta"
+    if not fasta.is_file():
+        fasta = DATA.parent / "RPS2.fasta"
     if not fasta.is_file():
         pytest.skip("RPS2.fasta not available")
     return read_first_sequence(fasta)
@@ -50,14 +53,6 @@ def _reference_table_to_results(
     return results
 
 
-def _load_reference_scores(path: Path) -> pd.DataFrame:
-    """Load score columns from wide or historical BHT reference CSV."""
-    df = pd.read_csv(path)
-    if "position" in df.columns:
-        return df
-    return pd.read_csv(path, index_col=0)
-
-
 def test_golden_merge_roundtrip_rps2(rps2_sequence: tuple[str, str]) -> None:
     """Re-merge predictor columns from BHT reference → identical wide scores."""
     ref_path = BHT / "all" / "RPS2_human_all.csv"
@@ -65,7 +60,7 @@ def test_golden_merge_roundtrip_rps2(rps2_sequence: tuple[str, str]) -> None:
         pytest.skip("Reference all CSV not available")
 
     protein_id, sequence = rps2_sequence
-    ref = _load_reference_scores(ref_path)
+    ref = load_reference_table(ref_path)
     assert len(ref) == len(sequence)
 
     results = _reference_table_to_results(ref, protein_id=protein_id, sequence=sequence)
@@ -86,6 +81,8 @@ def test_golden_merge_roundtrip_rps2(rps2_sequence: tuple[str, str]) -> None:
 def test_golden_crossbeta_rpl27_json() -> None:
     json_path = DATA / "RPL27 and RPL36" / "Cross-beta predictor" / "RPL27.json"
     if not json_path.is_file():
+        json_path = DATA.parent / "RPL27 and RPL36" / "Cross-beta predictor" / "RPL27.json"
+    if not json_path.is_file():
         pytest.skip("RPL27 cross-beta JSON not available")
 
     import json
@@ -100,7 +97,19 @@ def test_golden_crossbeta_rpl27_json() -> None:
     assert result.binary[0] == 1
 
 
-def test_config_weights_sum_to_one() -> None:
+def test_config_active_weights_sum_to_one() -> None:
     cfg = load_config()
     total = sum(cfg.metascore.weights.values())
     assert 0.999 <= total <= 1.001
+
+
+def test_metascore_presets_configured() -> None:
+    cfg = load_config()
+    names = list_metascore_presets(cfg)
+    assert "functional_amyloids" in names
+    assert "pathogenic_amyloids" in names
+    assert "predictor_specificity" in names
+    assert cfg.metascore.preset == "predictor_specificity"
+    for name in names:
+        total = sum(cfg.metascore.presets[name].values())
+        assert 0.999 <= total <= 1.001

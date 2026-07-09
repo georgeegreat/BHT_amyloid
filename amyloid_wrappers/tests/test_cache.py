@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from amyloid_wrappers.core.cache import raw_cache_path, store_raw_cache
+from amyloid_wrappers.core.cache import clear_cache_dir, raw_cache_path, store_raw_cache
 from amyloid_wrappers.core.config import AppConfig, CacheConfig, MetascoreConfig
+
+
+def test_clear_cache_dir(tmp_path: Path) -> None:
+    root = tmp_path / "cache"
+    root.mkdir()
+    (root / "protein" / "waltz").mkdir(parents=True)
+    cfg = AppConfig(cache=CacheConfig(root=str(root), enabled=True))
+
+    removed = clear_cache_dir(cfg)
+    assert removed == root
+    assert not root.exists()
 
 
 def test_store_raw_cache(tmp_path: Path) -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from amyloid_wrappers.core.cache import store_raw_cache
+from amyloid_wrappers.core.cache import clear_cache_dir, store_raw_cache
 from amyloid_wrappers.core.config import load_config
 from amyloid_wrappers.core.fasta import read_first_sequence
 from amyloid_wrappers.predictors.registry import get_parser, list_parsers
@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        help="Path to predictors.toml (default: package config/ or AMYLOID_WRAPPERS_CONFIG)",
+        help="Path to config.cfg (default: package config.cfg or AMYLOID_WRAPPERS_CONFIG)",
     )
     parser.add_argument(
         "--protein-id",
@@ -64,9 +64,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override config threshold for this run",
     )
     parser.add_argument(
-        "--no-cache",
+        "--keep-cache",
         action="store_true",
-        help="Do not copy raw input to cache/{protein_id}/{predictor}/",
+        help="Keep cache/{protein_id}/{predictor}/ after run (default: remove cache/)",
     )
     parser.add_argument(
         "--cache-dir",
@@ -99,16 +99,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     result.to_csv(args.output)
 
-    if not args.no_cache:
+    if args.keep_cache:
         cached = store_raw_cache(
             protein_id,
             args.predictor,
             source,
             config=cfg,
             cache_root=args.cache_dir,
+            force=True,
         )
         if cached:
             print(f"Cached raw input → {cached}")
+    else:
+        removed = clear_cache_dir(cfg, args.cache_dir)
+        if removed:
+            print(f"[cleanup] removed {removed}")
 
     print(f"Wrote {args.output} ({result.length} residues, {result.spec.display_name})")
     return 0
@@ -166,7 +171,7 @@ examples:
 
 notes:
   --fasta or --sequence is required.
-  Raw inputs are cached under cache/{protein_id}/{predictor}/ unless --no-cache.
-  Thresholds default from config/predictors.toml; override with --threshold.
+  Raw inputs are cached only with --keep-cache (cache/ is removed by default after run).
+  Thresholds default from config.cfg; override with --threshold.
 """
 

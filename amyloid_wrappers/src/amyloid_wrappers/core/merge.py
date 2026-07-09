@@ -41,12 +41,14 @@ def merge_predictor_tables(
     if len(seen_keys) != len(results):
         raise ValueError("Duplicate predictor in merge input")
 
-    merged = results[0].to_dataframe()[["position", "aa_name"]]
-    for result in results:
-        part = result.to_dataframe()[[result.spec.score_column, result.spec.bin_column]]
-        merged = pd.concat([merged, part], axis=1)
+    frames: list[pd.DataFrame] = []
+    for index, result in enumerate(results):
+        df = result.to_dataframe()
+        if index == 0:
+            frames.append(df[["position", "aa_name"]])
+        frames.append(df[[result.spec.score_column, result.spec.bin_column]])
 
-    return merged
+    return pd.concat(frames, axis=1)
 
 
 def merge_standard_csv_files(

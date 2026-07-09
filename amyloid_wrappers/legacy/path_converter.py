@@ -164,28 +164,28 @@ class BatchPATHProcessor:
         if self.verbose:
             print(f"✓ Loaded {len(results)} models for {results['seq'].nunique()} hexapeptides")
         
-        # Extract best DOPE per hexapeptide
-        hexapeptide_dope = {}
-        for seq in results['seq'].unique():
-            seq_data = results[results['seq'] == seq]
-            best_dope = seq_data['dope'].min()  # МИНИМАЛЬНЫЙ = наиболее стабильный
-            hexapeptide_dope[seq] = best_dope
-        
+        # Extract best DOPE per hexapeptide (vectorized groupby)
+        hexapeptide_dope = results.groupby("seq", sort=False)["dope"].min()
+
         # Calculate normalization parameters
-        self.dope_min = results['dope'].min()
-        self.dope_max = results['dope'].max()
-        
+        self.dope_min = results["dope"].min()
+        self.dope_max = results["dope"].max()
+        span = float(self.dope_max - self.dope_min)
+
         if self.verbose:
             print(f"\nDOPE range: [{self.dope_min:.2f}, {self.dope_max:.2f}]")
-        
+
         # Normalize with INVERSION
-        self.hexapeptide_scores = {
-            seq: (self.dope_max - dope) / (self.dope_max - self.dope_min)
-            for seq, dope in hexapeptide_dope.items()
-        }
-        
+        if span == 0.0:
+            self.hexapeptide_scores = {seq: 0.0 for seq in hexapeptide_dope.index}
+        else:
+            self.hexapeptide_scores = {
+                seq: (self.dope_max - dope) / span
+                for seq, dope in hexapeptide_dope.items()
+            }
+
         # Calculate global threshold
-        scores_array = np.array(list(self.hexapeptide_scores.values()))
+        scores_array = np.fromiter(self.hexapeptide_scores.values(), dtype=float)
         self.global_threshold = np.percentile(scores_array, self.threshold_percentile)
         
         if self.verbose:

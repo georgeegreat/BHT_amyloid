@@ -37,6 +37,7 @@ def store_raw_cache(
     *,
     config: AppConfig | None = None,
     cache_root: str | Path | None = None,
+    force: bool = False,
 ) -> Path | None:
     """
     Copy ``source`` into the cache tree.
@@ -44,7 +45,7 @@ def store_raw_cache(
     Returns destination path, or ``None`` if caching is disabled.
     """
     cfg = config or load_config()
-    if not cfg.cache.enabled:
+    if not force and not cfg.cache.enabled:
         return None
 
     source = Path(source)
@@ -61,6 +62,18 @@ def store_raw_cache(
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, dest)
     return dest
+
+
+def clear_cache_dir(
+    config: AppConfig | None = None,
+    cache_root: str | Path | None = None,
+) -> Path | None:
+    """Remove the cache root directory if it exists. Returns removed path or None."""
+    root = cache_dir(config, cache_root)
+    if root.is_dir():
+        shutil.rmtree(root)
+        return root
+    return None
 
 
 def _safe_segment(value: str) -> str:

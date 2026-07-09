@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from amyloid_wrappers.core.schema import PredictorResult, get_predictor_spec
@@ -41,28 +42,34 @@ class APPNNParser(BasePredictorParser):
                 raise ValueError("APPNN amino acids disagree with supplied sequence")
             sequence = seq_from_file
 
-        scores = [0.0] * len(sequence)
-        binary = [0] * len(sequence)
+        positions = ordered[position_col].astype(int)
+        if (positions < 1).any() or (positions > len(sequence)).any():
+            bad = int(positions[(positions < 1) | (positions > len(sequence))].iloc[0])
+            raise ValueError(f"APPNN position out of range: {bad}")
 
-        for _, row in ordered.iterrows():
-            pos = int(row[position_col])
-            idx = pos - 1
-            if not 0 <= idx < len(sequence):
-                raise ValueError(f"APPNN position out of range: {pos}")
-            score = float(row[score_col])
-            scores[idx] = score
-            hotspot = row.get("hotspot_region", 0)
-            if pd.notna(hotspot) and int(hotspot) == 1:
-                binary[idx] = 1
-            elif score >= score_threshold:
-                binary[idx] = 1
+        idx = positions.to_numpy(dtype=int) - 1
+        score_values = ordered[score_col].astype(float).to_numpy()
+
+        scores = np.zeros(len(sequence), dtype=float)
+        binary = np.zeros(len(sequence), dtype=int)
+        scores[idx] = score_values
+
+        if "hotspot_region" in ordered.columns:
+            hotspot = ordered["hotspot_region"].fillna(0).astype(int).to_numpy()
+            binary[idx] = np.where(
+                hotspot == 1,
+                1,
+                (score_values >= score_threshold).astype(int),
+            )
+        else:
+            binary[idx] = (score_values >= score_threshold).astype(int)
 
         return PredictorResult(
             protein_id=protein_id,
             sequence=sequence,
             spec=self.spec,
-            scores=scores,
-            binary=binary,
+            scores=scores.tolist(),
+            binary=binary.tolist(),
             metadata={"score_threshold": score_threshold},
         )
 

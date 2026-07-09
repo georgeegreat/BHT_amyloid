@@ -30,7 +30,8 @@ install_required_packages <- function() {
 check_appnn_package <- function() {
   if (!requireNamespace("appnn", quietly = TRUE)) {
     cat("The 'appnn' package is not installed.\n")
-    cat("Please install the appnn package manually:\n")
+    cat("Please install the appnn package manually before running this script.\n")
+    quit(status = 1)
   }
 }
 
@@ -79,13 +80,15 @@ read_fasta_file <- function(file_path) {
   names <- character()
   current_seq <- character()
   current_name <- character()
+  seq_count <- 0L
   
   for (line in lines) {
     if (str_starts(line, ">")) {
       # Save previous sequence if exists
       if (length(current_seq) > 0) {
-        sequences <- c(sequences, paste(current_seq, collapse = ""))
-        names <- c(names, current_name)
+        seq_count <- seq_count + 1L
+        sequences[[seq_count]] <- paste(current_seq, collapse = "")
+        names[[seq_count]] <- current_name
       }
       # Start new sequence
       current_name <- str_sub(line, 2)
@@ -99,11 +102,12 @@ read_fasta_file <- function(file_path) {
   
   # Save the last sequence
   if (length(current_seq) > 0) {
-    sequences <- c(sequences, paste(current_seq, collapse = ""))
-    names <- c(names, current_name)
+    seq_count <- seq_count + 1L
+    sequences[[seq_count]] <- paste(current_seq, collapse = "")
+    names[[seq_count]] <- current_name
   }
   
-  tibble(name = names, sequence = sequences)
+  tibble(name = unlist(names, use.names = FALSE), sequence = unlist(sequences, use.names = FALSE))
 }
 
 #' Format hotspot regions as string

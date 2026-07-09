@@ -135,7 +135,9 @@ def test_crossbeta_length_mismatch(crossbeta_json: Path) -> None:
 
 def test_reference_bht_columns_match_registry() -> None:
     """Historical BHT all/RPS2_human_all.csv score columns match registry."""
-    ref_path = Path(__file__).resolve().parents[2] / "BHT_amyloid" / "all" / "RPS2_human_all.csv"
+    from amyloid_wrappers.paths import bht_reference_root
+
+    ref_path = bht_reference_root() / "all" / "RPS2_human_all.csv"
     if not ref_path.exists():
         pytest.skip("Reference CSV not available")
     ref = pd.read_csv(ref_path, index_col=0)

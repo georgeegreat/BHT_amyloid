@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
+from amyloid_wrappers.core.inputs import expand_csv_inputs, guess_predictor_from_filename
 from amyloid_wrappers.core.merge import write_merge_csv
-from amyloid_wrappers.core.schema import get_predictor_spec, read_standard_csv, resolve_predictor_key
+from amyloid_wrappers.core.schema import get_predictor_spec, read_standard_csv
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,15 +57,21 @@ def main(argv: list[str] | None = None) -> int:
         code = exc.code
         return 0 if code in (0, None) else int(code)
 
-    input_paths = _expand_inputs(args.inputs)
+    try:
+        input_paths = expand_csv_inputs(args.inputs)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     if args.predictors and len(args.predictors) != len(input_paths):
         print("Error: --predictor count must match number of input files", file=sys.stderr)
         return 2
 
-    specs = [
-        get_predictor_spec(key or _guess_predictor(path))
-        for key, path in zip(args.predictors or [None] * len(input_paths), input_paths, strict=True)
-    ]
+    specs = []
+    for key, path in zip(args.predictors or [None] * len(input_paths), input_paths, strict=True):
+        try:
+            specs.append(get_predictor_spec(key or guess_predictor_from_filename(path)))
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
 
     sequence = None
     if args.fasta:
@@ -79,48 +85,11 @@ def main(argv: list[str] | None = None) -> int:
     ]
 
     output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
     write_merge_csv(results, output)
 
     print(f"Merged {len(results)} predictors → {output}")
     return 0
-
-
-def _expand_inputs(items: list[str]) -> list[Path]:
-    paths: list[Path] = []
-    for item in items:
-        path = Path(item)
-        if path.is_dir():
-            paths.extend(sorted(path.glob("*.csv")))
-        else:
-            paths.append(path)
-    if not paths:
-        raise SystemExit("No CSV inputs found")
-    return paths
-
-
-def _guess_predictor(path: Path) -> str:
-    """Infer predictor from filename tokens (avoids false matches like *apath*)."""
-    stem = path.stem.lower()
-    tokens = set(re.split(r"[_\-.]+", stem))
-
-    token_map = {
-        "crossbeta": "crossbeta",
-        "archcandy": "archcandy",
-        "aggreprot": "aggreprot",
-        "aggrescan": "aggrescan",
-        "appnn": "appnn",
-        "pasta": "pasta",
-        "path": "path",
-        "waltz": "waltz",
-    }
-    for token, key in token_map.items():
-        if token in tokens:
-            return resolve_predictor_key(key)
-
-    if "cross-beta-predictor" in stem or "cross-beta" in stem:
-        return resolve_predictor_key("crossbeta")
-
-    raise SystemExit(f"Cannot infer predictor from filename: {path.name}. Use --predictor.")
 
 
 if __name__ == "__main__":

@@ -6,19 +6,68 @@ merges them into wide CSV tables for metascores and downstream analysis.
 
 ## Install
 
+Recommended: one conda env **`wrappers`** with the package, PATH tooling, and test deps.
+Python-only deps are declared in `pyproject.toml`; Modeller comes from conda; PyRosetta
+and APPNN (R) are installed once per machine (see below).
+
+### New environment
+
 ```bash
-conda activate env   # or your venv
 cd amyloid_wrappers
-pip install -e ".[test]"    # package + pandas/numpy + pytest into THIS env
+conda env create -f environment.yml   # Python 3.11 + Modeller; pip deps from requirements.txt
+conda activate wrappers
+pip install -e ".[test]"
 ```
 
-Verify the install uses the same Python:
+### Existing `wrappers` env (install / upgrade missing pieces)
 
 ```bash
-which python pytest amyloid-parse
-python -c "import amyloid_wrappers, pandas; print('OK')"
-python -m pytest          # always uses env Python — preferred
+conda activate wrappers
+conda env update -f environment.yml --prune
+pip install -e ".[test]"
 ```
+
+`pip install -e .` pulls core deps from `pyproject.toml` (`pandas`, `numpy`, `biopython`,
+`scikit-learn`). Re-running it is safe: only missing or outdated wheels are installed.
+
+### Verify
+
+```bash
+which python pytest amyloid-parse amyloid-run
+python -c "import amyloid_wrappers, Bio, sklearn; print('OK')"
+python -m pytest
+```
+
+### External tools (once per machine)
+
+| Tool | Install | Used by |
+|------|---------|---------|
+| **Modeller** | `conda install -c salilab modeller` (in `environment.yml`) | PATH (`vendor/PATH/path1.1.py`) |
+| **PyRosetta** | `pip install pyrosetta --find-links https://west.rosettacommons.org/pyrosetta/quarterly/release` or [pyrosetta.org](https://www.pyrosetta.org/) | PATH |
+| **APPNN** (R) | R + CRAN package `appnn` (+ `dplyr`, `tidyr`, `readr`, `stringr`, `purrr`); runner calls `legacy/appnn_converter.R` | APPNN |
+
+**APPNN (R) install** — if system site-library is not writable, packages go to the user library automatically:
+
+```bash
+Rscript -e 'install.packages(c("appnn","dplyr","tidyr","readr","stringr","purrr"), repos="https://cloud.r-project.org")'
+Rscript -e 'library(appnn); cat("appnn OK\n")'
+```
+
+**Modeller license** (required for PATH live runs):
+
+```bash
+export KEY_MODELLER="YOUR_LICENSE_KEY"    # add to ~/.bashrc
+```
+
+Edit `$CONDA_PREFIX/lib/modeller-10.8/modlib/modeller/config.py`:
+
+```python
+install_dir = r'/path/to/anaconda3/envs/wrappers/lib/modeller-10.8'
+license = r'YOUR_LICENSE_KEY'
+```
+
+Tested pip/conda versions (env `wrappers`, Python 3.11): numpy 2.4.6, pandas 3.0.3,
+biopython 1.87, scikit-learn 1.9.0, modeller 10.8, pyrosetta 2026.3+releasequarterly.
 
 ### CLI commands
 
@@ -29,10 +78,15 @@ python -m amyloid_wrappers -h    # same
 amyloid-parse --help             # parse one predictor
 amyloid-merge --help             # merge standard CSVs
 amyloid-run --help               # run PATH / APPNN (Phase 1)
+amyloids-widemerge --help        # merge + optional BHT reference check
+
+python -m amyloid_wrappers batch --help   # multifasta batch pipeline
+python wrappers_run.py --help             # same (root script)
 
 python -m amyloid_wrappers parse --help
 python -m amyloid_wrappers merge --help
 python -m amyloid_wrappers run --help
+python -m amyloid_wrappers widemerge --help
 ```
 
 ## Phase 0 checklist
@@ -44,29 +98,38 @@ python -m amyloid_wrappers run --help
 | Parsers from notebook (+ PATH) | done      | `predictors/*.py`                   |
 | `amyloid-merge` CLI            | done      | `cli/merge.py`                      |
 | Raw-output cache               | done      | `core/cache.py`                     |
-| Predictor weights in config    | done      | `config/predictors.toml`            |
+| Predictor weights in config    | done      | `config.cfg`            |
 | Golden tests vs BHT reference  | done      | `tests/test_golden.py`              |
-| PATH / APPNN runners           | done      | `runners/`, `cli/run.py`, `legacy/` |
+| PATH / APPNN runners           | done      | `runners/`, `vendor/PATH/`, `legacy/` |
+| Metascore weight presets       | done      | `config.cfg` |
+| `amyloids-widemerge`           | done      | `cli/widemerge.py` |
 | Web-tool runners (WALTZ, …)    | phase 2–3 | `legacy/api/` reference scripts     |
 
 
 ---
 
-## Configuration (`config/predictors.toml`)
+## Configuration (`config.cfg`)
 
-All tunable weights and thresholds live in one file. Override path:
+All tunable weights and thresholds live in one INI-style `.cfg` file. Override path:
 
 ```bash
-export AMYLOID_WRAPPERS_CONFIG=/path/to/predictors.toml
-amyloid-parse waltz ... --config /path/to/predictors.toml
+export AMYLOID_WRAPPERS_CONFIG=/path/to/config.cfg
+amyloid-parse waltz ... --config /path/to/config.cfg
 ```
 
-### `[metascore.weights]`
+### Metascore weight presets
 
-Per-predictor weights for the linear metascore (sum must be **1.0**). Keys match the
-registry (`path`, `appnn`, `crossbeta`, …). Will be used by `core/metascore.py`.
+Three presets in `config.cfg` (7 predictors; AggreProt excluded for now):
 
-Default: equal weights `0.125` × 8. To fit weights against existing hackathon tables:
+| Preset | Use case |
+|--------|----------|
+| `functional_amyloids` | WALTZ/PATH/APPNN/PASTA emphasis |
+| `pathogenic_amyloids` | Cross-Beta/APPNN emphasis |
+| `predictor_specificity` | **default** — conservative, tool-specificity oriented |
+
+Active preset: `[metascore].preset` or env `AMYLOID_METASCORE_PRESET`.
+
+Optional least-squares fit against hackathon tables:
 
 ```bash
 python scripts/calibrate_weights.py \
@@ -74,7 +137,7 @@ python scripts/calibrate_weights.py \
   --metascore-csv ../BHT_amyloid/metascores/RPS2_metascore_table.csv
 ```
 
-Paste the printed snippet into `[metascore.weights]`.
+Paste the printed snippet into a new preset table under `[metascore.presets.*]`.
 
 ### `[predictors.*]`
 
@@ -82,9 +145,26 @@ Parser thresholds (binarisation cutoffs). CLI `--threshold` overrides for a sing
 
 ### `[runners.path]` / `[runners.appnn]`
 
-External tool paths for `amyloid-run`. Set `path.script` to `path1.1py` from
-[PATH](https://github.com/KubaWojciechowski/PATH) or `AMYLOID_PATH_SCRIPT`.
-APPNN defaults to `legacy/appnn_converter.R` in this package.
+PATH uses bundled `vendor/PATH/path1.1.py` (default script). Run inside the **`wrappers`**
+conda env so the same Python has Modeller + PyRosetta.
+
+```ini
+[runners.path]
+script =
+python = python3
+```
+
+Overrides: `AMYLOID_PATH_SCRIPT`, `AMYLOID_PATH_PYTHON`.
+
+APPNN defaults to `legacy/appnn_converter.R` (`Rscript` on `PATH`).
+
+#### Vendored PATH (vs [upstream](https://github.com/KubaWojciechowski/PATH))
+
+Wojciechowski & Kotulska, *Sci Rep* **10**, 7721 (2020). Local tweaks in `path1.1.py`:
+auto-detect Modeller binary, `--modeller` flag, sklearn pickle compat, skip finished
+Modeller runs, clearer empty-results error.
+
+---
 
 ### `[cache]`
 
@@ -92,10 +172,10 @@ APPNN defaults to `legacy/appnn_converter.R` in this package.
 | Key       | Default | Meaning                                               |
 | --------- | ------- | ----------------------------------------------------- |
 | `root`    | `cache` | Base directory for raw copies                         |
-| `enabled` | `true`  | Set `false` or use `amyloid-parse --no-cache` to skip |
+| `enabled` | `false` | Set `true` or pass CLI `--keep-cache` to retain cache |
 
 
-Layout: `cache/{protein_id}/{predictor}/raw.{ext}`
+Layout: `cache/{protein_id}/{predictor}/raw.{ext}` — removed after each run unless `--keep-cache`.
 
 ---
 
@@ -107,7 +187,7 @@ Layout: `cache/{protein_id}/{predictor}/raw.{ext}`
 FASTA / raw predictor output
         ↓  amyloid-run (PATH, APPNN) or manual tool + amyloid-parse
 standard CSV per predictor   (+ optional raw cache)
-        ↓  amyloid-merge
+        ↓  amyloid-merge  (or amyloids-widemerge with --reference)
 wide CSV (position, aa_name, all predictors)
         ↓  metascore (phase 5)
 metascores/*_metascore.csv
@@ -148,9 +228,9 @@ amyloid-parse path --results results.csv --fasta RPS2.fasta -o RPS2_PATH.csv
 | ------------------------ | ----------------------------------- |
 | `--fasta` / `--sequence` | Sequence source (required)          |
 | `--input` / `--results`  | Raw file (`--results` = PATH alias) |
-| `--config`               | TOML config path                    |
+| `--config`               | CFG config path (`config.cfg`) |
 | `--threshold`            | Override binarisation threshold     |
-| `--no-cache`             | Skip raw cache copy                 |
+| `--keep-cache`           | Keep `cache/` after run (default: remove) |
 | `--cache-dir`            | Override `[cache].root`             |
 
 
@@ -167,6 +247,48 @@ amyloid-run appnn --skip-run --input APPNN_parsed/RPS2_APPNN.csv --fasta RPS2.fa
 
 PATH threading is slow — use `--skip-run` in CI or when `results.csv` already exists.
 
+### `amyloid-wrappers batch` (multifasta PATH + APPNN)
+
+Runs every sequence in a multifasta through external runners, parses to standard CSV,
+and writes one wide merged table per protein. Progress: `[PATH]`, `[APPNN]`, `[merge]`.
+
+```bash
+conda activate wrappers
+python -m amyloid_wrappers batch vendor/PATH/test.fasta -o output_dir \
+    --predictors path,appnn --batch-size 3
+# or: python wrappers_run.py vendor/PATH/test.fasta -o output_dir
+```
+
+**Output layout** (`-o` / `--output`):
+
+```
+output_dir/
+├── PATH/parsed/{protein_id}_PATH.csv
+├── APPNN/parsed/{protein_id}_APPNN.csv
+├── merged/{protein_id}_merged.csv
+└── .tmp/                  # removed after successful run (fasta split scratch)
+```
+
+Per-predictor `work/` directories (Modeller/PyRosetta/R temp files) are **removed
+automatically** after a successful run. Use `--save-raw-files DIR` to archive raw
+`{protein_id}/{predictor}.*` copies (needed for `--skip-run` after work cleanup).
+
+| Flag | Purpose |
+| ---- | ------- |
+| `-o` / `--output` | Output root (creates `PATH/`, `APPNN/`, `merged/` subdirs) |
+| `--predictors` | Comma-separated list (default: `path,appnn`) |
+| `--batch-size` | Sequences per APPNN invocation (PATH always uses 1) |
+| `--save-raw-files` | Archive raw tool outputs per protein (enables `--skip-run` after cleanup) |
+| `--keep-cache` | Keep `cache/` after run (default: removed) |
+| `--skip-run` | Parse only; read raw from `{PREDICTOR}/work/` or `--save-raw-files` |
+
+**Smoke test** (3 short proteins, ~4–5 min with PATH live run):
+
+```bash
+python -m amyloid_wrappers batch vendor/PATH/test.fasta -o output_dir --predictors path,appnn
+ls output_dir/PATH/parsed output_dir/APPNN/parsed output_dir/merged
+```
+
 ### `amyloid-merge`
 
 ```bash
@@ -179,13 +301,34 @@ amyloid-merge parsed/*.csv -o merged.csv --fasta RPS2.fasta
 | `--predictor` | Force type per input file (if filename ambiguous) |
 | `--fasta`     | Validate identical sequence across inputs         |
 
+### `amyloids-widemerge`
+
+Same merge as `amyloid-merge`, plus optional regression check against a BHT
+`*_all.csv` reference table (score columns only).
+
+```bash
+amyloids-widemerge --input-dir parsed/ --fasta RPS2.fasta -o merged/RPS2_merged.csv
+amyloids-widemerge parsed/*.csv --fasta RPS2.fasta -o merged.csv \
+    --reference ../all/RPS2_human_all.csv
+amyloids-widemerge --input-dir parsed/ -o merged.csv --check-bht-reference \
+    --reference-name RPS2_human_all.csv
+```
+
+| Flag | Purpose |
+| ---- | ------- |
+| `--input-dir` | Directory of standard CSVs (or pass paths as arguments) |
+| `--reference` | BHT wide table for score-column comparison |
+| `--check-bht-reference` | Default reference under `BHT_amyloid/all/` |
+| `--rtol` / `--atol` | Tolerance for reference comparison |
+
+Also available as `python -m amyloid_wrappers widemerge …`.
 
 ---
 
 ## Predictors: raw output → canonical mapping
 
 Each parser implements `parse(source, protein_id, sequence) → PredictorResult`.
-Thresholds default from `config/predictors.toml`.
+Thresholds default from `config.cfg`.
 
 ### `path` — PATH threading
 
@@ -206,7 +349,7 @@ Thresholds default from `config/predictors.toml`.
 
 |                      |                                                                                 |
 | -------------------- | ------------------------------------------------------------------------------- |
-| **Raw input**        | CSV from `BHT_amyloid/appnn_converter.R`                                        |
+| **Raw input**        | CSV from `legacy/appnn_converter.R` (`APPNN_parsed/{id}_APPNN.csv`) |
 | **Expected columns** | `aminoacid_position`, `aminoacid_score`, optional `aminoacid`, `hotspot_region` |
 | `APPNN_score`        | Per-residue APPNN score                                                         |
 | `APPNN_bin`          | 1 if `hotspot_region==1` or score ≥ 0.5                                         |
@@ -304,6 +447,29 @@ write_merge_csv([waltz, appnn], "merged.csv")
 
 ---
 
+## Package layout
+
+```
+amyloid_wrappers/
+├── config.cfg                weights, thresholds, cache, runners
+├── environment.yml           conda env `wrappers` (Python + Modeller)
+├── requirements.txt          pip runtime dependencies
+├── requirements-dev.txt      pytest, ruff, build
+├── wrappers_run.py           batch pipeline entry point
+├── vendor/PATH/              vendored PATH (path1.1.py, templates, models)
+├── legacy/                   frozen BHT reference scripts
+├── scripts/calibrate_weights.py
+├── src/amyloid_wrappers/
+│   ├── batch/                multifasta pipeline
+│   ├── core/                 schema, config, cache, fasta, merge, validate, metascore
+│   ├── predictors/           parse-only modules
+│   ├── runners/              PATH / APPNN execution (Phase 1)
+│   └── cli/                  parse, merge, run, batch, widemerge, app
+└── tests/                    unit + golden tests (fixtures only)
+```
+
+---
+
 ## Tests
 
 ```bash
@@ -314,25 +480,41 @@ python -m pytest
 
 - Unit parsers: `tests/test_parsers.py`
 - Cache: `tests/test_cache.py`
+- Batch: `tests/test_batch.py`
 - Golden merge roundtrip vs `BHT_amyloid/all/RPS2_human_all.csv`
 - Golden Cross-Beta vs `RPL27 and RPL36/Cross-beta predictor/RPL27.json`
 
 ---
 
-## Package layout
+## Manual multifasta workflow (parse-only tools)
 
+For WALTZ, PASTA, AggreProt, ArchCandy, Cross-Beta (no live runner yet), use
+`amyloid-wrappers batch` for PATH+APPNN, then per-protein `amyloid-parse`:
+
+```bash
+amyloid-parse waltz --input raw/${ID}.dat --fasta fasta_split/${ID}.fasta \
+  -o output_dir/waltz/parsed/${ID}_waltz.csv
+amyloid-merge output_dir/*/parsed/${ID}_*.csv --fasta fasta_split/${ID}.fasta \
+  -o output_dir/merged/${ID}_merged.csv
 ```
-amyloid_wrappers/
-├── config/predictors.toml    weights, thresholds, cache, runners
-├── legacy/                   frozen BHT reference scripts (see legacy/README.md)
-├── scripts/calibrate_weights.py
-├── src/amyloid_wrappers/
-│   ├── core/                 schema, config, cache, fasta, merge, metascore
-│   ├── predictors/           parse-only modules
-│   ├── runners/              PATH / APPNN execution (Phase 1)
-│   └── cli/                  parse, merge, run, app
-└── tests/
-```
+
+Or merge with BHT reference check: `amyloids-widemerge --reference …`.
+
+---
+
+## Development roadmap (v0.2.4)
+
+| Phase | Status | Next steps |
+| ----- | ------ | ---------- |
+| **0** | done | 7 parsers, merge, cache, config, golden tests |
+| **1** | done | PATH/APPNN runners, `batch`, `amyloids-widemerge`, live validation on `test.fasta` |
+| **2** | planned | WALTZ local runner, `BaseWebRunner` for Selenium tools |
+| **3** | planned | Web runners: AggreProt, ArchCandy, Cross-Beta, PASTA (`legacy/api/`) |
+| **4** | planned | Aggrescan parser + runner |
+| **5** | planned | `amyloid-metascore` CLI, CI on GitHub Actions |
+
+**Validated (Phase 1):** `python -m amyloid_wrappers batch vendor/PATH/test.fasta -o output_dir`
+with Modeller + PyRosetta + R `appnn` in env `wrappers`.
 
 ---
 
@@ -344,6 +526,6 @@ amyloid_wrappers/
 | `arch_cross_...ipynb` | `amyloid-parse` / `legacy/` copy                                    |
 | `path_converter.py`   | `legacy/path_converter.py`, `runners/path.py`, `predictors/path.py` |
 | `appnn_converter.R`   | `legacy/appnn_converter.R`, `runners/appnn.py`                      |
-| `all/*_all.csv`       | wide merge via `amyloid-merge` (same score columns)                 |
+| `all/*_all.csv`       | wide merge via `amyloid-merge`; validate with `amyloids-widemerge --reference` |
 
 

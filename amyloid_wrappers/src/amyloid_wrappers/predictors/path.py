@@ -44,14 +44,13 @@ class PATHParser(BasePredictorParser):
         )
 
     def _load_hexapeptide_scores(self, results: pd.DataFrame) -> dict[str, float]:
-        dope_min = results["dope"].min()
         dope_max = results["dope"].max()
-        hexapeptide_dope: dict[str, float] = {}
-        for seq in results["seq"].unique():
-            seq_data = results[results["seq"] == seq]
-            hexapeptide_dope[seq] = float(seq_data["dope"].min())
+        span = float(dope_max - results["dope"].min())
+        hexapeptide_dope = results.groupby("seq", sort=False)["dope"].min()
+        if span == 0.0:
+            return {seq: 0.0 for seq in hexapeptide_dope.index}
         return {
-            seq: (dope_max - dope) / (dope_max - dope_min)
+            seq: (dope_max - dope) / span
             for seq, dope in hexapeptide_dope.items()
         }
 
@@ -79,6 +78,6 @@ class PATHParser(BasePredictorParser):
         per_residue[mask] = score_sum[mask] / count[mask]
 
         global_threshold = float(
-            np.percentile(list(hexapeptide_scores.values()), self.threshold_percentile)
+            np.percentile(np.fromiter(hexapeptide_scores.values(), dtype=float), self.threshold_percentile)
         )
         return [float(x) for x in per_residue], global_threshold
